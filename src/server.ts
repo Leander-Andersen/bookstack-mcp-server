@@ -322,5 +322,3 @@ export class BookStackMCPServer {
 }
 
 export default BookStackMCPServer;
-
-export default BookStackMCPServer;
