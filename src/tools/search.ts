@@ -3,6 +3,24 @@ import { ValidationHandler } from '../validation/validator';
 import { Logger } from '../utils/logger';
 import { MCPTool } from '../types';
 
+/** Strip HTML tags and decode common entities for a plain-text markdown fallback. */
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/h[1-6]>/gi, '\n\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /**
  * Search tools for BookStack MCP Server
  *
@@ -33,12 +51,11 @@ export class SearchTools {
       description: 'Search across all BookStack content. Supports advanced query syntax and structured filters. When include_content is true, full page markdown is automatically inlined into results — no second tool call needed.',
       inputSchema: {
         type: 'object',
-        required: ['query'],
         properties: {
           query: {
             type: 'string',
-            minLength: 1,
-            description: 'Search query string. Supports advanced syntax: "exact phrase", {type:page|book|chapter|shelf}, {tag:name=value}, {created_by:me}. Structured filters below are merged into this query automatically.',
+            default: '',
+            description: 'Search query string. Supports advanced syntax: "exact phrase", {type:page|book|chapter|shelf}, {tag:name=value}, {created_by:me}. Structured filters below are merged into this query automatically. Can be empty when using filters alone.',
           },
           page: {
             type: 'integer',
@@ -153,7 +170,7 @@ export class SearchTools {
 
         finalQuery = finalQuery.trim();
         if (!finalQuery) {
-          throw new Error('Search query cannot be empty. Provide a query string or at least one filter.');
+          throw new Error('Provide a query string or at least one filter (e.g. filters.type, filters.tag).');
         }
 
         this.logger.info('Searching content', { query: finalQuery, page: params.page, count: params.count });
@@ -174,7 +191,9 @@ export class SearchTools {
             if (item.type !== 'page') return item;
             try {
               const full = await this.client.getPage(item.id);
-              return { ...item, content: { markdown: full.markdown, html: full.html } };
+              // markdown is empty for WYSIWYG-authored pages — strip HTML as fallback
+              const markdown = full.markdown || htmlToPlainText(full.html || '');
+              return { ...item, content: { markdown, html: full.html } };
             } catch {
               return item; // Fall back to snippet if fetch fails
             }

@@ -96,21 +96,22 @@ export class BookStackClient implements BookStackAPIClient {
   ): Promise<T> {
     let url = `${this.config.bookstack.baseUrl}${path}`;
     if (params && Object.keys(params).length > 0) {
-      const filtered: Record<string, string> = {};
+      const parts: string[] = [];
       for (const [k, v] of Object.entries(params)) {
         if (v === undefined || v === null) continue;
         if (typeof v === 'object' && !Array.isArray(v)) {
-          // Flatten nested objects as bracket notation: filter[name]=foo
+          // Flatten nested objects as PHP bracket notation: filter[name]=foo
+          // Use literal brackets (not %5B%5D) so BookStack/Laravel parses them correctly.
           for (const [subK, subV] of Object.entries(v as Record<string, unknown>)) {
             if (subV !== undefined && subV !== null) {
-              filtered[`${k}[${subK}]`] = String(subV);
+              parts.push(`${k}[${subK}]=${encodeURIComponent(String(subV))}`);
             }
           }
         } else {
-          filtered[k] = String(v);
+          parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
         }
       }
-      url += '?' + new URLSearchParams(filtered).toString();
+      if (parts.length > 0) url += '?' + parts.join('&');
     }
 
     this.logger.debug('API request', { method, url });
@@ -419,7 +420,17 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Audit Log API
   async listAuditLog(params?: AuditLogListParams): Promise<ListResponse<AuditLogEntry>> {
-    return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, params as unknown as Record<string, unknown>);
+    // Remap entity_type → loggable_type (BookStack API uses loggable_type in filter)
+    let mapped: Record<string, unknown> = { ...(params as any) };
+    if (mapped.filter && typeof mapped.filter === 'object') {
+      const f = { ...(mapped.filter as any) };
+      if (f.entity_type !== undefined) {
+        f.loggable_type = f.entity_type;
+        delete f.entity_type;
+      }
+      mapped = { ...mapped, filter: f };
+    }
+    return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, mapped);
   }
 
   // System API
