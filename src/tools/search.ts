@@ -142,10 +142,17 @@ export class SearchTools {
         }
       ],
       handler: async (params: any) => {
-        // Build final query by merging structured filters into the query string
-        let finalQuery: string = params.query ?? '';
-
         const f = params.filters ?? {};
+        const textQuery = (params.query ?? '').trim();
+
+        // When there is no text query, BookStack's search API ignores filter operators.
+        // Route to list endpoints + client-side tag filtering instead.
+        if (!textQuery && f.tag) {
+          return await this.tagOnlySearch(f, params.count ?? 20, params.include_content ?? false);
+        }
+
+        // Build final query by merging structured filters into the query string
+        let finalQuery = textQuery;
 
         if (f.type) {
           finalQuery += ` {type:${f.type}}`;
@@ -158,15 +165,9 @@ export class SearchTools {
             finalQuery += ` {tag:${name}}`;
           }
         }
-        if (f.owned_by) {
-          finalQuery += ` {owned_by:${f.owned_by}}`;
-        }
-        if (f.created_by) {
-          finalQuery += ` {created_by:${f.created_by}}`;
-        }
-        if (f.updated_by) {
-          finalQuery += ` {updated_by:${f.updated_by}}`;
-        }
+        if (f.owned_by)   finalQuery += ` {owned_by:${f.owned_by}}`;
+        if (f.created_by) finalQuery += ` {created_by:${f.created_by}}`;
+        if (f.updated_by) finalQuery += ` {updated_by:${f.updated_by}}`;
 
         finalQuery = finalQuery.trim();
         if (!finalQuery) {
@@ -176,7 +177,7 @@ export class SearchTools {
         this.logger.info('Searching content', { query: finalQuery, page: params.page, count: params.count });
 
         const searchParams: any = { query: finalQuery };
-        if (params.page) searchParams.page = params.page;
+        if (params.page)  searchParams.page  = params.page;
         if (params.count) searchParams.count = params.count;
 
         const results = await this.client.search(searchParams);
@@ -203,6 +204,74 @@ export class SearchTools {
         return { ...results, data: enriched };
       },
     };
+  }
+
+  /**
+   * Tag-only search: BookStack's search API ignores filter operators when the
+   * query has no text. Instead, fetch all items of the relevant type(s) and
+   * filter client-side by tag name/value.
+   */
+  private async tagOnlySearch(
+    f: { type?: string; tag?: { name?: string; value?: string } },
+    count: number,
+    includeContent: boolean,
+  ): Promise<{ data: unknown[]; total: number }> {
+    const typeToPath: Record<string, string> = {
+      page: '/pages', book: '/books', chapter: '/chapters', shelf: '/shelves',
+    };
+
+    const paths = f.type
+      ? [typeToPath[f.type] ?? '/pages']
+      : ['/pages', '/books', '/chapters', '/shelves'];
+
+    const types = f.type
+      ? [f.type]
+      : ['page', 'book', 'chapter', 'shelf'];
+
+    // Fetch all items for each type in parallel
+    const allItemSets = await Promise.all(
+      paths.map(path => (this.client as any).fetchAll(path, { sort: 'updated_at' }))
+    );
+
+    // Filter by tag and convert to search-result shape
+    const tagName  = f.tag?.name?.toLowerCase();
+    const tagValue = f.tag?.value?.toLowerCase();
+
+    const matched: unknown[] = [];
+    for (let i = 0; i < allItemSets.length; i++) {
+      const contentType = types[i];
+      for (const item of allItemSets[i] as any[]) {
+        const tags: any[] = item.tags ?? [];
+        const hasTag = tags.some(t =>
+          (!tagName  || t.name?.toLowerCase()  === tagName) &&
+          (!tagValue || t.value?.toLowerCase() === tagValue)
+        );
+        if (!hasTag) continue;
+
+        const result: any = {
+          id: item.id,
+          name: item.name,
+          type: contentType,
+          url: item.url ?? '',
+          preview_html: { content: '' },
+          tags,
+        };
+
+        if (includeContent && contentType === 'page') {
+          try {
+            const full = await (this.client as any).getPage(item.id);
+            result.content = {
+              markdown: full.markdown || htmlToPlainText(full.html || ''),
+              html: full.html,
+            };
+          } catch { /* fall through */ }
+        }
+
+        matched.push(result);
+      }
+    }
+
+    return { data: matched.slice(0, count), total: matched.length };
   }
 }
 

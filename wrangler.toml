@@ -6,7 +6,7 @@ account_id = "fa8dc1730bfd7b376de59d07758e28b5"
 
 [vars]
 SERVER_NAME = "bookstack-mcp-server"
-SERVER_VERSION = "1.2.1"
+SERVER_VERSION = "1.2.2"
 
 # Secrets — set via `wrangler secret put` or the CF dashboard:
 #   npx wrangler secret put BOOKSTACK_BASE_URL

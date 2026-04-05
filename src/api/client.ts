@@ -209,7 +209,7 @@ export class BookStackClient implements BookStackAPIClient {
    * Fetch every item from a paginated list endpoint, splitting into parallel
    * batches of `pageSize` once the first response reveals the total count.
    */
-  private async fetchAll<T>(path: string, params: Record<string, unknown>, pageSize = 500): Promise<T[]> {
+  async fetchAll<T>(path: string, params: Record<string, unknown>, pageSize = 500): Promise<T[]> {
     const first = await this.request<ListResponse<T>>('GET', path, undefined, { ...params, count: pageSize, offset: 0 });
     const all: T[] = [...first.data];
 
@@ -468,14 +468,20 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Audit Log API
   async listAuditLog(params?: AuditLogListParams): Promise<ListResponse<AuditLogEntry>> {
-    // Remap entity_type → loggable_type (BookStack API uses loggable_type in filter)
     let mapped: Record<string, unknown> = { ...(params as any) };
     if (mapped.filter && typeof mapped.filter === 'object') {
       const f = { ...(mapped.filter as any) };
+
+      // Remap entity_type → loggable_type (BookStack API naming)
       if (f.entity_type !== undefined) {
         f.loggable_type = f.entity_type;
         delete f.entity_type;
       }
+
+      // date_from / date_to are top-level params in BookStack, not nested under filter
+      if (f.date_from !== undefined) { mapped.date_from = f.date_from; delete f.date_from; }
+      if (f.date_to   !== undefined) { mapped.date_to   = f.date_to;   delete f.date_to; }
+
       mapped = { ...mapped, filter: f };
     }
     return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, mapped);
