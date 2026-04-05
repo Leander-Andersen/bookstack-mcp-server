@@ -469,6 +469,9 @@ export class BookStackClient implements BookStackAPIClient {
   // Audit Log API
   async listAuditLog(params?: AuditLogListParams): Promise<ListResponse<AuditLogEntry>> {
     let mapped: Record<string, unknown> = { ...(params as any) };
+    let dateFrom: string | undefined;
+    let dateTo: string | undefined;
+
     if (mapped.filter && typeof mapped.filter === 'object') {
       const f = { ...(mapped.filter as any) };
 
@@ -478,13 +481,35 @@ export class BookStackClient implements BookStackAPIClient {
         delete f.entity_type;
       }
 
-      // BookStack expects date_from / date_to as top-level params, not under filter[]
-      if (f.date_from !== undefined) { mapped.date_from = f.date_from; delete f.date_from; }
-      if (f.date_to   !== undefined) { mapped.date_to   = f.date_to;   delete f.date_to;   }
+      // BookStack API does not support date filtering — extract and apply client-side
+      if (f.date_from !== undefined) { dateFrom = f.date_from; delete f.date_from; }
+      if (f.date_to   !== undefined) { dateTo   = f.date_to;   delete f.date_to;   }
 
       mapped = { ...mapped, filter: f };
     }
-    return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, mapped);
+
+    if (!dateFrom && !dateTo) {
+      return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, mapped);
+    }
+
+    // Date filtering: fetch all entries matching the other filters, then filter client-side
+    const { count, offset, ...fetchParams } = mapped as any;
+    const all = await this.fetchAll<AuditLogEntry>('/audit-log', fetchParams);
+
+    const from = dateFrom ? new Date(dateFrom).getTime() : -Infinity;
+    const to   = dateTo   ? new Date(dateTo + 'T23:59:59Z').getTime() : Infinity;
+
+    const filtered = all.filter((entry: any) => {
+      const t = new Date(entry.created_at).getTime();
+      return t >= from && t <= to;
+    });
+
+    const pageOffset = offset ?? 0;
+    const pageCount  = count  ?? 20;
+    return {
+      data: filtered.slice(pageOffset, pageOffset + pageCount),
+      total: filtered.length,
+    };
   }
 
   // System API
