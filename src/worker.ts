@@ -70,6 +70,7 @@ async function handleMCPRequest(
             headers[k] = Array.isArray(v) ? v[v.length - 1] : v;
           }
         }
+        return res;
       },
       removeHeader(key: string) { delete headers[key]; },
       hasHeader(key: string) { return key in headers; },

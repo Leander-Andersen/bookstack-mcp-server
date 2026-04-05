@@ -2,6 +2,7 @@ name = "bookstack-mcp-server"
 main = "src/worker.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat_v2"]
+account_id = "fa8dc1730bfd7b376de59d07758e28b5"
 
 [vars]
 SERVER_NAME = "bookstack-mcp-server"
