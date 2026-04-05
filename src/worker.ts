@@ -63,6 +63,17 @@ async function handleMCPRequest(
         res.end(JSON.stringify(data));
       },
       send(data: string) { res.end(data); },
+      writeHead(code: number, hdrs?: Record<string, string | string[]>) {
+        statusCode = code;
+        if (hdrs) {
+          for (const [k, v] of Object.entries(hdrs)) {
+            headers[k] = Array.isArray(v) ? v[v.length - 1] : v;
+          }
+        }
+      },
+      removeHeader(key: string) { delete headers[key]; },
+      hasHeader(key: string) { return key in headers; },
+      flushHeaders() {},
       writableEnded: false,
       headersSent: false,
     };
@@ -114,16 +125,16 @@ export default {
 
       if (request.method === 'POST') {
         const body = await request.formData();
-        const password      = body.get('password') as string ?? '';
+        const password      = (body.get('password') as string ?? '').trim();
         const redirectUri   = body.get('redirect_uri') as string ?? '';
         const state         = body.get('state') as string ?? '';
         const codeChallenge = body.get('code_challenge') as string ?? '';
         const clientId      = body.get('client_id') as string ?? '';
 
-        // Validate the password against MCP_API_KEY
+        // Validate the password against MCP_API_KEY (trim both to avoid whitespace/newline issues)
         const encoder = new TextEncoder();
         const aBytes = encoder.encode(password);
-        const bBytes = encoder.encode(apiKey);
+        const bBytes = encoder.encode(apiKey.trim());
         let diff = aBytes.length === bBytes.length ? 0 : 1;
         const len = Math.min(aBytes.length, bBytes.length);
         for (let i = 0; i < len; i++) diff |= aBytes[i] ^ bBytes[i];
