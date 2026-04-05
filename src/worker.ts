@@ -44,6 +44,14 @@ async function handleMCPRequest(
     const headers: Record<string, string> = {};
     let statusCode = 200;
     let responseBody = '';
+    let settled = false;
+
+    function doResolve() {
+      if (!settled) {
+        settled = true;
+        resolve(new Response(responseBody || null, { status: statusCode, headers }));
+      }
+    }
 
     const res: any = {
       get statusCode() { return statusCode; },
@@ -55,7 +63,7 @@ async function handleMCPRequest(
       },
       end(data?: string | Uint8Array) {
         if (data) responseBody += typeof data === 'string' ? data : new TextDecoder().decode(data);
-        resolve(new Response(responseBody, { status: statusCode, headers }));
+        doResolve();
       },
       status(code: number) { statusCode = code; return res; },
       json(data: unknown) {
@@ -77,6 +85,12 @@ async function handleMCPRequest(
       flushHeaders() {},
       writableEnded: false,
       headersSent: false,
+      // EventEmitter stubs — transport calls res.on('close', ...) for SSE cleanup
+      on(_event: string, _listener: (...args: unknown[]) => void) { return res; },
+      once(_event: string, _listener: (...args: unknown[]) => void) { return res; },
+      off(_event: string, _listener: (...args: unknown[]) => void) { return res; },
+      removeListener(_event: string, _listener: (...args: unknown[]) => void) { return res; },
+      emit(_event: string, ..._args: unknown[]) { return false; },
     };
 
     const req: any = {
@@ -86,7 +100,11 @@ async function handleMCPRequest(
       url: new URL(request.url).pathname,
     };
 
-    transport.handleRequest(req, res, body).catch(reject);
+    // For GET (SSE), the transport stores res and never calls end().
+    // Resolve after handleRequest returns so the Worker doesn't hang.
+    transport.handleRequest(req, res, body)
+      .then(() => doResolve())
+      .catch(reject);
   });
 }
 
