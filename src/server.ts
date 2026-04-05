@@ -327,7 +327,7 @@ export class BookStackMCPServer {
 }
 
 // Start server if run directly
-if (require.main === module) {
+if (typeof module !== 'undefined' && require.main === module) {
   const transport = process.env.MCP_TRANSPORT || 'http';
 
   if (transport === 'stdio') {
