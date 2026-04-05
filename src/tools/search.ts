@@ -143,7 +143,8 @@ export class SearchTools {
       ],
       handler: async (params: any) => {
         const f = params.filters ?? {};
-        const textQuery = (params.query ?? '').trim();
+        // Treat "*" as empty — BookStack doesn't support wildcards and returns 0 results.
+        const textQuery = (params.query ?? '').trim().replace(/^\*+$/, '');
 
         // When there is no text query, BookStack's search API ignores filter operators.
         // Route to list endpoints + client-side tag filtering instead.
@@ -180,7 +181,21 @@ export class SearchTools {
         if (params.page)  searchParams.page  = params.page;
         if (params.count) searchParams.count = params.count;
 
-        const results = await this.client.search(searchParams);
+        let results = await this.client.search(searchParams);
+
+        // Post-filter by tag when a tag filter is active — BookStack search treats
+        // tag filters as OR with text matches, so non-tagged results can leak through.
+        if (f.tag) {
+          const tagName  = f.tag.name?.toLowerCase();
+          const tagValue = f.tag.value?.toLowerCase();
+          const filtered = results.data.filter((item: any) =>
+            (item.tags ?? []).some((t: any) =>
+              (!tagName  || t.name?.toLowerCase()  === tagName) &&
+              (!tagValue || t.value?.toLowerCase() === tagValue)
+            )
+          );
+          results = { data: filtered, total: filtered.length };
+        }
 
         if (!params.include_content) {
           return results;

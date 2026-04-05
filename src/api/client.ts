@@ -477,11 +477,7 @@ export class BookStackClient implements BookStackAPIClient {
         f.loggable_type = f.entity_type;
         delete f.entity_type;
       }
-
-      // date_from / date_to are top-level params in BookStack, not nested under filter
-      if (f.date_from !== undefined) { mapped.date_from = f.date_from; delete f.date_from; }
-      if (f.date_to   !== undefined) { mapped.date_to   = f.date_to;   delete f.date_to; }
-
+      // date_from / date_to stay under filter → serialised as filter[date_from] etc.
       mapped = { ...mapped, filter: f };
     }
     return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, mapped);
