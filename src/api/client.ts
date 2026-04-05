@@ -98,7 +98,15 @@ export class BookStackClient implements BookStackAPIClient {
     if (params && Object.keys(params).length > 0) {
       const filtered: Record<string, string> = {};
       for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && v !== null) {
+        if (v === undefined || v === null) continue;
+        if (typeof v === 'object' && !Array.isArray(v)) {
+          // Flatten nested objects as bracket notation: filter[name]=foo
+          for (const [subK, subV] of Object.entries(v as Record<string, unknown>)) {
+            if (subV !== undefined && subV !== null) {
+              filtered[`${k}[${subK}]`] = String(subV);
+            }
+          }
+        } else {
           filtered[k] = String(v);
         }
       }
