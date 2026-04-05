@@ -100,10 +100,13 @@ async function handleMCPRequest(
       url: new URL(request.url).pathname,
     };
 
-    // For GET (SSE), the transport stores res and never calls end().
-    // Resolve after handleRequest returns so the Worker doesn't hang.
     transport.handleRequest(req, res, body)
-      .then(() => doResolve())
+      .then(() => {
+        // For GET/SSE the transport stores res but never calls end() — resolve here.
+        // For POST the transport calls res.end() asynchronously after processing,
+        // so doResolve() there would fire too early (before the response is ready).
+        if (request.method === 'GET' || request.method === 'DELETE') doResolve();
+      })
       .catch(reject);
   });
 }
