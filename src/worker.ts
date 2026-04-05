@@ -2,33 +2,43 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { BookStackMCPServer } from './server';
 import { ConfigManager } from './config/manager';
 import { WorkerEnv, buildConfigFromEnv, seedProcessEnv } from './config/worker-config';
+import {
+  oauthMetadata,
+  authorizePage,
+  generateAuthCode,
+  validateAuthCode,
+  generateAccessToken,
+  validateAccessToken,
+} from './utils/oauth';
 
 export type { WorkerEnv as Env };
 
-/**
- * Timing-safe string comparison to prevent timing attacks on the API key.
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const encoder = new TextEncoder();
-  const aBytes = encoder.encode(a);
-  const bBytes = encoder.encode(b);
-  let diff = 0;
-  for (let i = 0; i < aBytes.length; i++) {
-    diff |= aBytes[i] ^ bBytes[i];
-  }
-  return diff === 0;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function html(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
 }
 
 /**
  * Bridge between Cloudflare Workers native Request/Response and the
- * Express-style req/res that StreamableHTTPServerTransport.handleRequest()
- * expects.
+ * Express-style req/res that StreamableHTTPServerTransport.handleRequest() expects.
  */
 async function handleMCPRequest(
   transport: StreamableHTTPServerTransport,
   request: Request,
-  body: unknown
+  body: unknown,
 ): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
     const headers: Record<string, string> = {};
@@ -44,9 +54,7 @@ async function handleMCPRequest(
         responseBody += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
       },
       end(data?: string | Uint8Array) {
-        if (data) {
-          responseBody += typeof data === 'string' ? data : new TextDecoder().decode(data);
-        }
+        if (data) responseBody += typeof data === 'string' ? data : new TextDecoder().decode(data);
         resolve(new Response(responseBody, { status: statusCode, headers }));
       },
       status(code: number) { statusCode = code; return res; },
@@ -70,13 +78,110 @@ async function handleMCPRequest(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Main Worker
+// ---------------------------------------------------------------------------
+
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    // --- 1. Validate MCP_API_KEY ---
-    const expectedKey = env.MCP_API_KEY;
-    if (!expectedKey) {
-      return new Response('Server misconfigured: MCP_API_KEY secret not set', { status: 500 });
+    const url = new URL(request.url);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    // ── Public routes (no auth) ─────────────────────────────────────────────
+
+    // Health check
+    if (url.pathname === '/health' && request.method === 'GET') {
+      return json({ status: 'ok' });
     }
+
+    // OAuth server metadata (RFC 8414) — Claude.ai fetches this to discover endpoints
+    if (url.pathname === '/.well-known/oauth-authorization-server' && request.method === 'GET') {
+      return json(oauthMetadata(baseUrl));
+    }
+
+    // OAuth authorization endpoint — show login page (GET) or process it (POST)
+    if (url.pathname === '/oauth/authorize') {
+      const apiKey = env.MCP_API_KEY;
+      if (!apiKey) return json({ error: 'server_error', error_description: 'MCP_API_KEY not configured' }, 500);
+
+      if (request.method === 'GET') {
+        const redirectUri   = url.searchParams.get('redirect_uri') ?? '';
+        const state         = url.searchParams.get('state') ?? '';
+        const codeChallenge = url.searchParams.get('code_challenge') ?? '';
+        const clientId      = url.searchParams.get('client_id') ?? '';
+        return html(authorizePage({ redirectUri, state, codeChallenge, clientId }));
+      }
+
+      if (request.method === 'POST') {
+        const body = await request.formData();
+        const password      = body.get('password') as string ?? '';
+        const redirectUri   = body.get('redirect_uri') as string ?? '';
+        const state         = body.get('state') as string ?? '';
+        const codeChallenge = body.get('code_challenge') as string ?? '';
+        const clientId      = body.get('client_id') as string ?? '';
+
+        // Validate the password against MCP_API_KEY
+        const encoder = new TextEncoder();
+        const aBytes = encoder.encode(password);
+        const bBytes = encoder.encode(apiKey);
+        let diff = aBytes.length === bBytes.length ? 0 : 1;
+        const len = Math.min(aBytes.length, bBytes.length);
+        for (let i = 0; i < len; i++) diff |= aBytes[i] ^ bBytes[i];
+
+        if (diff !== 0) {
+          return html(authorizePage({ redirectUri, state, codeChallenge, clientId, error: true }));
+        }
+
+        // Correct password — generate auth code and redirect back to Claude
+        const code = await generateAuthCode(apiKey, codeChallenge);
+        const redirect = new URL(redirectUri);
+        redirect.searchParams.set('code', code);
+        redirect.searchParams.set('state', state);
+        return Response.redirect(redirect.toString(), 302);
+      }
+
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    // OAuth token endpoint — exchange auth code for access token
+    if (url.pathname === '/oauth/token' && request.method === 'POST') {
+      const apiKey = env.MCP_API_KEY;
+      if (!apiKey) return json({ error: 'server_error' }, 500);
+
+      let params: URLSearchParams;
+      const ct = request.headers.get('content-type') ?? '';
+      if (ct.includes('application/json')) {
+        const body = await request.json() as Record<string, string>;
+        params = new URLSearchParams(body);
+      } else {
+        params = new URLSearchParams(await request.text());
+      }
+
+      const grantType    = params.get('grant_type');
+      const code         = params.get('code') ?? '';
+      const codeVerifier = params.get('code_verifier') ?? '';
+
+      if (grantType !== 'authorization_code') {
+        return json({ error: 'unsupported_grant_type' }, 400);
+      }
+
+      const valid = await validateAuthCode(apiKey, code, codeVerifier);
+      if (!valid) {
+        return json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
+      }
+
+      const accessToken = await generateAccessToken(apiKey);
+      return json({
+        access_token: accessToken,
+        token_type: 'Bearer',
+        expires_in: 3600,
+      });
+    }
+
+    // ── Protected routes (Bearer token required) ────────────────────────────
+
+    const apiKey = env.MCP_API_KEY;
+    if (!apiKey) return json({ error: 'server_error' }, 500);
 
     const authHeader = request.headers.get('Authorization') ?? '';
     if (!authHeader.startsWith('Bearer ')) {
@@ -86,61 +191,44 @@ export default {
       });
     }
 
-    const providedKey = authHeader.slice('Bearer '.length);
-    if (!timingSafeEqual(providedKey, expectedKey)) {
-      return new Response('Unauthorized', { status: 401 });
-    }
-
-    // --- 2. Route handling ---
-    const url = new URL(request.url);
-
-    if (url.pathname === '/health' && request.method === 'GET') {
-      return new Response(JSON.stringify({ status: 'ok' }), {
-        headers: { 'Content-Type': 'application/json' },
+    const token = authHeader.slice('Bearer '.length);
+    const tokenValid = await validateAccessToken(apiKey, token);
+    if (!tokenValid) {
+      return new Response('Unauthorized', {
+        status: 401,
+        headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP", error="invalid_token"' },
       });
     }
 
+    // MCP endpoint
     if (url.pathname !== '/mcp' && url.pathname !== '/message') {
       return new Response('Not Found', { status: 404 });
     }
 
     if (request.method !== 'POST') {
-      return new Response('Method Not Allowed', {
-        status: 405,
-        headers: { Allow: 'POST' },
-      });
+      return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
     }
 
-    // --- 3. Seed process.env + reset ConfigManager singleton ---
-    // ConfigManager reads process.env in its constructor. In CF Workers,
-    // process.env is an empty object by default (nodejs_compat_v2), so we
-    // populate it from the Worker secrets before each request.
+    // Seed process.env + reset ConfigManager so server-info.ts tools work
     seedProcessEnv(env);
     ConfigManager.reset();
 
-    // --- 4. Parse request body ---
     let body: unknown;
     try {
       body = await request.json();
     } catch {
-      return new Response('Bad Request: invalid JSON body', { status: 400 });
+      return new Response('Bad Request: invalid JSON', { status: 400 });
     }
 
-    // --- 5. Build BookStack config from env and construct MCP server ---
     const config = buildConfigFromEnv(env);
 
     try {
-      const mcpServer = new BookStackMCPServer({
-        bookstack: config.bookstack,
-      });
-
+      const mcpServer = new BookStackMCPServer({ bookstack: config.bookstack });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-
       await mcpServer.connect(transport);
-
       return await handleMCPRequest(transport, request, body);
     } catch (error) {
       console.error('Worker MCP request failed:', error);
