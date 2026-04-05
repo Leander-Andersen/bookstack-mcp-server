@@ -70,6 +70,14 @@ export class ConfigManager {
   }
 
   /**
+   * Reset the singleton — used by the Cloudflare Worker to re-initialize
+   * config on each request after seeding process.env from Worker secrets.
+   */
+  static reset(): void {
+    (ConfigManager as any).instance = undefined;
+  }
+
+  /**
    * Load and validate configuration from environment variables
    */
   private loadConfig(): Config {

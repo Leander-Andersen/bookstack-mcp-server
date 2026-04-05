@@ -1,40 +1,10 @@
-import winston, { Logger as WinstonLogger } from 'winston';
-
 /**
- * Logger utility using Winston
+ * Logger utility — console-based, compatible with Cloudflare Workers and Node.js
  */
 export class Logger {
   private static instance: Logger;
-  private logger: WinstonLogger;
 
-  private constructor() {
-    const level = process.env.LOG_LEVEL || 'info';
-    const format = process.env.LOG_FORMAT || 'pretty';
-
-    const logFormat = format === 'json' 
-      ? winston.format.combine(
-          winston.format.timestamp(),
-          winston.format.errors({ stack: true }),
-          winston.format.json()
-        )
-      : winston.format.combine(
-          winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-          winston.format.errors({ stack: true }),
-          winston.format.colorize(),
-          winston.format.printf(({ timestamp, level, message, ...meta }) => {
-            const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
-            return `${timestamp} [${level}] ${message}${metaStr}`;
-          })
-        );
-
-    this.logger = winston.createLogger({
-      level,
-      format: logFormat,
-      transports: [
-        new winston.transports.Console(),
-      ],
-    });
-  }
+  private constructor() {}
 
   static getInstance(): Logger {
     if (!Logger.instance) {
@@ -43,26 +13,30 @@ export class Logger {
     return Logger.instance;
   }
 
+  private format(level: string, message: string, meta?: any): string {
+    const ts = new Date().toISOString();
+    const metaStr = meta !== undefined ? ' ' + JSON.stringify(meta) : '';
+    return `${ts} [${level.toUpperCase()}] ${message}${metaStr}`;
+  }
+
   debug(message: string, meta?: any): void {
-    this.logger.debug(message, meta);
+    console.debug(this.format('debug', message, meta));
   }
 
   info(message: string, meta?: any): void {
-    this.logger.info(message, meta);
+    console.info(this.format('info', message, meta));
   }
 
   warn(message: string, meta?: any): void {
-    this.logger.warn(message, meta);
+    console.warn(this.format('warn', message, meta));
   }
 
   error(message: string, meta?: any): void {
-    this.logger.error(message, meta);
+    console.error(this.format('error', message, meta));
   }
 
-  child(meta: any): Logger {
-    const childLogger = new Logger();
-    childLogger.logger = this.logger.child(meta);
-    return childLogger;
+  child(_meta: any): Logger {
+    return Logger.getInstance();
   }
 }
 

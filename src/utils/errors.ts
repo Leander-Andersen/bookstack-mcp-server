@@ -1,4 +1,3 @@
-import { AxiosError } from 'axios';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { Logger } from './logger';
 
@@ -22,33 +21,38 @@ export class ErrorHandler {
   constructor(private logger: Logger) {}
 
   /**
-   * Handle Axios errors specifically
+   * Handle fetch HTTP errors (non-2xx responses)
    */
-  handleAxiosError(error: AxiosError): McpError {
-    const status = error.response?.status;
-    const mapping = this.errorMappings[status as keyof typeof this.errorMappings] || { 
-      type: 'unknown_error', 
-      message: 'Unknown error occurred' 
+  handleFetchError(status: number, url: string, method: string, body: string): McpError {
+    const mapping = this.errorMappings[status as keyof typeof this.errorMappings] || {
+      type: 'unknown_error',
+      message: 'Unknown error occurred',
     };
+
+    let details: unknown;
+    try {
+      details = JSON.parse(body);
+    } catch {
+      details = body;
+    }
 
     const mcpError = new McpError(
       this.mapToMCPErrorCode(status),
       mapping.message,
-      { 
+      {
         type: mapping.type,
         status,
-        details: error.response?.data,
-        url: error.config?.url,
-        method: error.config?.method?.toUpperCase(),
+        details,
+        url,
+        method,
       }
     );
 
-    this.logger.error('Axios error handled', {
+    this.logger.error('Fetch error handled', {
       status,
       type: mapping.type,
-      url: error.config?.url,
-      method: error.config?.method,
-      message: error.message,
+      url,
+      method,
     });
 
     return mcpError;
@@ -62,10 +66,6 @@ export class ErrorHandler {
       return error;
     }
 
-    if (error.isAxiosError) {
-      return this.handleAxiosError(error);
-    }
-
     // Handle validation errors from Zod
     if (error.name === 'ZodError') {
       const validationDetails = error.errors.map((err: any) => ({
@@ -76,7 +76,7 @@ export class ErrorHandler {
       return new McpError(
         ErrorCode.InvalidParams,
         'Validation failed',
-        { 
+        {
           type: 'validation_error',
           validation: validationDetails,
         }
@@ -87,7 +87,7 @@ export class ErrorHandler {
     const mcpError = new McpError(
       ErrorCode.InternalError,
       error.message || 'An unexpected error occurred',
-      { 
+      {
         type: 'internal_error',
         stack: error.stack,
       }
@@ -129,29 +129,11 @@ export class ErrorHandler {
   }
 
   /**
-   * Check if error is retryable
-   */
-  isRetryable(error: any): boolean {
-    if (error.isAxiosError) {
-      const status = error.response?.status;
-      return [429, 500, 502, 503, 504].includes(status);
-    }
-
-    return false;
-  }
-
-  /**
    * Create a user-friendly error message
    */
   getUserFriendlyMessage(error: any): string {
     if (error instanceof McpError) {
       return error.message;
-    }
-
-    if (error.isAxiosError) {
-      const status = error.response?.status;
-      const mapping = this.errorMappings[status as keyof typeof this.errorMappings];
-      return mapping?.message || 'An error occurred while communicating with BookStack';
     }
 
     return 'An unexpected error occurred';

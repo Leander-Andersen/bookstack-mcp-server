@@ -9,6 +9,9 @@
     "prepublishOnly": "npm run build",
     "dev": "ts-node src/server.ts",
     "watch": "nodemon --exec ts-node src/server.ts",
+    "dev:worker": "wrangler dev",
+    "build:worker": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
@@ -31,7 +34,7 @@
   "author": "BookStack MCP Integration",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.10.0",
     "axios": "^1.6.0",
     "zod": "^3.22.4",
     "winston": "^3.10.0",
@@ -43,6 +46,8 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "wrangler": "^3.0.0",
+    "@cloudflare/workers-types": "^4.0.0",
     "@types/node": "^20.8.0",
     "@types/express": "^4.17.17",
     "@types/cors": "^2.8.14",

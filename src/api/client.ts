@@ -1,9 +1,6 @@
-import axios, { AxiosInstance, AxiosResponse, AxiosError, AxiosRequestConfig } from 'axios';
-import { Agent } from 'https';
 import { Config } from '../config/manager';
 import { Logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/errors';
-import { RateLimiter } from '../utils/rateLimit';
 import {
   BookStackAPIClient,
   Book,
@@ -61,44 +58,27 @@ import {
 
 /**
  * BookStack API Client
- * 
- * Provides a comprehensive wrapper around the BookStack REST API
- * with built-in error handling, rate limiting, and retry logic.
+ *
+ * Wraps the BookStack REST API using the native fetch API,
+ * compatible with both Cloudflare Workers and Node.js 18+.
  */
 export class BookStackClient implements BookStackAPIClient {
-  private client: AxiosInstance;
   private logger: Logger;
   private errorHandler: ErrorHandler;
-  private rateLimiter: RateLimiter;
   private config: Config;
+  private baseHeaders: Record<string, string>;
 
   constructor(config: Config, logger: Logger, errorHandler: ErrorHandler) {
     this.config = config;
     this.logger = logger;
     this.errorHandler = errorHandler;
-    this.rateLimiter = new RateLimiter(config.rateLimit);
+    this.baseHeaders = {
+      'Authorization': `Token ${config.bookstack.apiToken}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': `${config.server.name}/${config.server.version}`,
+    };
 
-    // Create HTTP agent for connection pooling
-    const httpsAgent = new Agent({
-      keepAlive: true,
-      maxSockets: 10,
-      timeout: config.bookstack.timeout,
-    });
-
-    // Initialize Axios client
-    this.client = axios.create({
-      baseURL: config.bookstack.baseUrl,
-      timeout: config.bookstack.timeout,
-      httpsAgent,
-      headers: {
-        'Authorization': `Token ${config.bookstack.apiToken}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': `${config.server.name}/${config.server.version}`,
-      },
-    });
-
-    this.setupInterceptors();
     this.logger.info('BookStack API client initialized', {
       baseUrl: config.bookstack.baseUrl,
       timeout: config.bookstack.timeout,
@@ -106,62 +86,101 @@ export class BookStackClient implements BookStackAPIClient {
   }
 
   /**
-   * Setup request and response interceptors
+   * Generic JSON request method
    */
-  private setupInterceptors(): void {
-    // Request interceptor for rate limiting and logging
-    this.client.interceptors.request.use(
-      async (config) => {
-        // Apply rate limiting
-        await this.rateLimiter.acquire();
-
-        this.logger.debug('API request', {
-          method: config.method?.toUpperCase(),
-          url: config.url,
-          params: config.params,
-        });
-
-        return config;
-      },
-      (error) => {
-        this.logger.error('Request interceptor error', error);
-        return Promise.reject(error);
+  private async request<T>(
+    method: string,
+    path: string,
+    data?: unknown,
+    params?: Record<string, unknown>
+  ): Promise<T> {
+    let url = `${this.config.bookstack.baseUrl}${path}`;
+    if (params && Object.keys(params).length > 0) {
+      const filtered: Record<string, string> = {};
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) {
+          filtered[k] = String(v);
+        }
       }
-    );
+      url += '?' + new URLSearchParams(filtered).toString();
+    }
 
-    // Response interceptor for error handling and logging
-    this.client.interceptors.response.use(
-      (response) => {
-        this.logger.debug('API response', {
-          status: response.status,
-          url: response.config.url,
-          dataLength: JSON.stringify(response.data).length,
-        });
-        return response;
-      },
-      (error: AxiosError) => {
-        this.logger.error('API error', {
-          status: error.response?.status,
-          url: error.config?.url,
-          message: error.message,
-          data: error.response?.data,
-        });
-        
-        return Promise.reject(this.errorHandler.handleAxiosError(error));
-      }
-    );
-  }
+    this.logger.debug('API request', { method, url });
 
-  /**
-   * Generic request method with retry logic
-   */
-  private async request<T>(config: AxiosRequestConfig): Promise<T> {
+    const init: RequestInit = {
+      method,
+      headers: this.baseHeaders,
+      signal: AbortSignal.timeout(this.config.bookstack.timeout),
+    };
+
+    if (data !== undefined) {
+      init.body = JSON.stringify(data);
+    }
+
+    let response: Response;
     try {
-      const response: AxiosResponse<T> = await this.client.request(config);
-      return response.data;
+      response = await fetch(url, init);
+    } catch (error) {
+      this.logger.error('Fetch network error', { url, method, error: String(error) });
+      throw this.errorHandler.handleError(error);
+    }
+
+    this.logger.debug('API response', { status: response.status, url });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw this.errorHandler.handleFetchError(response.status, url, method, body);
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    try {
+      return await response.json() as T;
     } catch (error) {
       throw this.errorHandler.handleError(error);
     }
+  }
+
+  /**
+   * Request that returns raw text (used for export endpoints)
+   */
+  private async requestText(
+    method: string,
+    path: string
+  ): Promise<ExportResult> {
+    const url = `${this.config.bookstack.baseUrl}${path}`;
+
+    this.logger.debug('API export request', { method, url });
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers: this.baseHeaders,
+        signal: AbortSignal.timeout(this.config.bookstack.timeout),
+      });
+    } catch (error) {
+      this.logger.error('Fetch network error', { url, method, error: String(error) });
+      throw this.errorHandler.handleError(error);
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw this.errorHandler.handleFetchError(response.status, url, method, body);
+    }
+
+    const content = await response.text();
+    const mimeType = response.headers.get('content-type') ?? 'application/octet-stream';
+    const parts = path.split('/');
+    const format = parts[parts.length - 1];
+
+    return {
+      content,
+      filename: `export.${format}`,
+      mime_type: mimeType,
+    };
   }
 
   /**
@@ -179,379 +198,207 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Books API
   async listBooks(params?: BooksListParams): Promise<ListResponse<Book>> {
-    return this.request<ListResponse<Book>>({
-      method: 'GET',
-      url: '/books',
-      params,
-    });
+    return this.request<ListResponse<Book>>('GET', '/books', undefined, params as Record<string, unknown>);
   }
 
   async createBook(params: CreateBookParams): Promise<Book> {
-    return this.request<Book>({
-      method: 'POST',
-      url: '/books',
-      data: params,
-    });
+    return this.request<Book>('POST', '/books', params);
   }
 
   async getBook(id: number): Promise<BookWithContents> {
-    return this.request<BookWithContents>({
-      method: 'GET',
-      url: `/books/${id}`,
-    });
+    return this.request<BookWithContents>('GET', `/books/${id}`);
   }
 
   async updateBook(id: number, params: UpdateBookParams): Promise<Book> {
-    return this.request<Book>({
-      method: 'PUT',
-      url: `/books/${id}`,
-      data: params,
-    });
+    return this.request<Book>('PUT', `/books/${id}`, params);
   }
 
   async deleteBook(id: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/books/${id}`,
-    });
+    await this.request<void>('DELETE', `/books/${id}`);
   }
 
   async exportBook(id: number, format: ExportFormat): Promise<ExportResult> {
-    return this.request<ExportResult>({
-      method: 'GET',
-      url: `/books/${id}/export/${format}`,
-    });
+    return this.requestText('GET', `/books/${id}/export/${format}`);
   }
 
   // Pages API
   async listPages(params?: PagesListParams): Promise<ListResponse<Page>> {
-    return this.request<ListResponse<Page>>({
-      method: 'GET',
-      url: '/pages',
-      params,
-    });
+    return this.request<ListResponse<Page>>('GET', '/pages', undefined, params as Record<string, unknown>);
   }
 
   async createPage(params: CreatePageParams): Promise<Page> {
-    return this.request<Page>({
-      method: 'POST',
-      url: '/pages',
-      data: params,
-    });
+    return this.request<Page>('POST', '/pages', params);
   }
 
   async getPage(id: number): Promise<PageWithContent> {
-    return this.request<PageWithContent>({
-      method: 'GET',
-      url: `/pages/${id}`,
-    });
+    return this.request<PageWithContent>('GET', `/pages/${id}`);
   }
 
   async updatePage(id: number, params: UpdatePageParams): Promise<Page> {
-    return this.request<Page>({
-      method: 'PUT',
-      url: `/pages/${id}`,
-      data: params,
-    });
+    return this.request<Page>('PUT', `/pages/${id}`, params);
   }
 
   async deletePage(id: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/pages/${id}`,
-    });
+    await this.request<void>('DELETE', `/pages/${id}`);
   }
 
   async exportPage(id: number, format: ExportFormat): Promise<ExportResult> {
-    return this.request<ExportResult>({
-      method: 'GET',
-      url: `/pages/${id}/export/${format}`,
-    });
+    return this.requestText('GET', `/pages/${id}/export/${format}`);
   }
 
   // Chapters API
   async listChapters(params?: ChaptersListParams): Promise<ListResponse<Chapter>> {
-    return this.request<ListResponse<Chapter>>({
-      method: 'GET',
-      url: '/chapters',
-      params,
-    });
+    return this.request<ListResponse<Chapter>>('GET', '/chapters', undefined, params as Record<string, unknown>);
   }
 
   async createChapter(params: CreateChapterParams): Promise<Chapter> {
-    return this.request<Chapter>({
-      method: 'POST',
-      url: '/chapters',
-      data: params,
-    });
+    return this.request<Chapter>('POST', '/chapters', params);
   }
 
   async getChapter(id: number): Promise<ChapterWithPages> {
-    return this.request<ChapterWithPages>({
-      method: 'GET',
-      url: `/chapters/${id}`,
-    });
+    return this.request<ChapterWithPages>('GET', `/chapters/${id}`);
   }
 
   async updateChapter(id: number, params: UpdateChapterParams): Promise<Chapter> {
-    return this.request<Chapter>({
-      method: 'PUT',
-      url: `/chapters/${id}`,
-      data: params,
-    });
+    return this.request<Chapter>('PUT', `/chapters/${id}`, params);
   }
 
   async deleteChapter(id: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/chapters/${id}`,
-    });
+    await this.request<void>('DELETE', `/chapters/${id}`);
   }
 
   async exportChapter(id: number, format: ExportFormat): Promise<ExportResult> {
-    return this.request<ExportResult>({
-      method: 'GET',
-      url: `/chapters/${id}/export/${format}`,
-    });
+    return this.requestText('GET', `/chapters/${id}/export/${format}`);
   }
 
   // Shelves API
   async listShelves(params?: ShelvesListParams): Promise<ListResponse<Bookshelf>> {
-    return this.request<ListResponse<Bookshelf>>({
-      method: 'GET',
-      url: '/shelves',
-      params,
-    });
+    return this.request<ListResponse<Bookshelf>>('GET', '/shelves', undefined, params as Record<string, unknown>);
   }
 
   async createShelf(params: CreateShelfParams): Promise<Bookshelf> {
-    return this.request<Bookshelf>({
-      method: 'POST',
-      url: '/shelves',
-      data: params,
-    });
+    return this.request<Bookshelf>('POST', '/shelves', params);
   }
 
   async getShelf(id: number): Promise<BookshelfWithBooks> {
-    return this.request<BookshelfWithBooks>({
-      method: 'GET',
-      url: `/shelves/${id}`,
-    });
+    return this.request<BookshelfWithBooks>('GET', `/shelves/${id}`);
   }
 
   async updateShelf(id: number, params: UpdateShelfParams): Promise<Bookshelf> {
-    return this.request<Bookshelf>({
-      method: 'PUT',
-      url: `/shelves/${id}`,
-      data: params,
-    });
+    return this.request<Bookshelf>('PUT', `/shelves/${id}`, params);
   }
 
   async deleteShelf(id: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/shelves/${id}`,
-    });
+    await this.request<void>('DELETE', `/shelves/${id}`);
   }
 
   // Users API
   async listUsers(params?: UsersListParams): Promise<ListResponse<User>> {
-    return this.request<ListResponse<User>>({
-      method: 'GET',
-      url: '/users',
-      params,
-    });
+    return this.request<ListResponse<User>>('GET', '/users', undefined, params as Record<string, unknown>);
   }
 
   async createUser(params: CreateUserParams): Promise<User> {
-    return this.request<User>({
-      method: 'POST',
-      url: '/users',
-      data: params,
-    });
+    return this.request<User>('POST', '/users', params);
   }
 
   async getUser(id: number): Promise<UserWithRoles> {
-    return this.request<UserWithRoles>({
-      method: 'GET',
-      url: `/users/${id}`,
-    });
+    return this.request<UserWithRoles>('GET', `/users/${id}`);
   }
 
   async updateUser(id: number, params: UpdateUserParams): Promise<User> {
-    return this.request<User>({
-      method: 'PUT',
-      url: `/users/${id}`,
-      data: params,
-    });
+    return this.request<User>('PUT', `/users/${id}`, params);
   }
 
   async deleteUser(id: number, migrateOwnershipId?: number): Promise<void> {
     const data = migrateOwnershipId ? { migrate_ownership_id: migrateOwnershipId } : undefined;
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/users/${id}`,
-      data,
-    });
+    await this.request<void>('DELETE', `/users/${id}`, data);
   }
 
   // Roles API
   async listRoles(params?: RolesListParams): Promise<ListResponse<Role>> {
-    return this.request<ListResponse<Role>>({
-      method: 'GET',
-      url: '/roles',
-      params,
-    });
+    return this.request<ListResponse<Role>>('GET', '/roles', undefined, params as Record<string, unknown>);
   }
 
   async createRole(params: CreateRoleParams): Promise<Role> {
-    return this.request<Role>({
-      method: 'POST',
-      url: '/roles',
-      data: params,
-    });
+    return this.request<Role>('POST', '/roles', params);
   }
 
   async getRole(id: number): Promise<RoleWithPermissions> {
-    return this.request<RoleWithPermissions>({
-      method: 'GET',
-      url: `/roles/${id}`,
-    });
+    return this.request<RoleWithPermissions>('GET', `/roles/${id}`);
   }
 
   async updateRole(id: number, params: UpdateRoleParams): Promise<Role> {
-    return this.request<Role>({
-      method: 'PUT',
-      url: `/roles/${id}`,
-      data: params,
-    });
+    return this.request<Role>('PUT', `/roles/${id}`, params);
   }
 
   async deleteRole(id: number, migrateOwnershipId?: number): Promise<void> {
     const data = migrateOwnershipId ? { migrate_ownership_id: migrateOwnershipId } : undefined;
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/roles/${id}`,
-      data,
-    });
+    await this.request<void>('DELETE', `/roles/${id}`, data);
   }
 
   // Attachments API
   async listAttachments(params?: AttachmentsListParams): Promise<ListResponse<Attachment>> {
-    return this.request<ListResponse<Attachment>>({
-      method: 'GET',
-      url: '/attachments',
-      params,
-    });
+    return this.request<ListResponse<Attachment>>('GET', '/attachments', undefined, params as Record<string, unknown>);
   }
 
   async createAttachment(params: CreateAttachmentParams): Promise<Attachment> {
-    return this.request<Attachment>({
-      method: 'POST',
-      url: '/attachments',
-      data: params,
-    });
+    return this.request<Attachment>('POST', '/attachments', params);
   }
 
   async getAttachment(id: number): Promise<Attachment> {
-    return this.request<Attachment>({
-      method: 'GET',
-      url: `/attachments/${id}`,
-    });
+    return this.request<Attachment>('GET', `/attachments/${id}`);
   }
 
   async updateAttachment(id: number, params: UpdateAttachmentParams): Promise<Attachment> {
-    return this.request<Attachment>({
-      method: 'PUT',
-      url: `/attachments/${id}`,
-      data: params,
-    });
+    return this.request<Attachment>('PUT', `/attachments/${id}`, params);
   }
 
   async deleteAttachment(id: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/attachments/${id}`,
-    });
+    await this.request<void>('DELETE', `/attachments/${id}`);
   }
 
   // Images API
   async listImages(params?: ImageGalleryListParams): Promise<ListResponse<Image>> {
-    return this.request<ListResponse<Image>>({
-      method: 'GET',
-      url: '/image-gallery',
-      params,
-    });
+    return this.request<ListResponse<Image>>('GET', '/image-gallery', undefined, params as Record<string, unknown>);
   }
 
   async createImage(params: CreateImageParams): Promise<Image> {
-    return this.request<Image>({
-      method: 'POST',
-      url: '/image-gallery',
-      data: params,
-    });
+    return this.request<Image>('POST', '/image-gallery', params);
   }
 
   async getImage(id: number): Promise<Image> {
-    return this.request<Image>({
-      method: 'GET',
-      url: `/image-gallery/${id}`,
-    });
+    return this.request<Image>('GET', `/image-gallery/${id}`);
   }
 
   async updateImage(id: number, params: UpdateImageParams): Promise<Image> {
-    return this.request<Image>({
-      method: 'PUT',
-      url: `/image-gallery/${id}`,
-      data: params,
-    });
+    return this.request<Image>('PUT', `/image-gallery/${id}`, params);
   }
 
   async deleteImage(id: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/image-gallery/${id}`,
-    });
+    await this.request<void>('DELETE', `/image-gallery/${id}`);
   }
 
   // Search API
   async search(params: SearchParams): Promise<ListResponse<SearchResult>> {
-    return this.request<ListResponse<SearchResult>>({
-      method: 'GET',
-      url: '/search',
-      params,
-    });
+    return this.request<ListResponse<SearchResult>>('GET', '/search', undefined, params as Record<string, unknown>);
   }
 
   // Recycle Bin API
   async listRecycleBin(params?: PaginationParams): Promise<ListResponse<RecycleBinItem>> {
-    return this.request<ListResponse<RecycleBinItem>>({
-      method: 'GET',
-      url: '/recycle-bin',
-      params,
-    });
+    return this.request<ListResponse<RecycleBinItem>>('GET', '/recycle-bin', undefined, params as Record<string, unknown>);
   }
 
   async restoreFromRecycleBin(deletionId: number): Promise<void> {
-    await this.request<void>({
-      method: 'PUT',
-      url: `/recycle-bin/${deletionId}`,
-    });
+    await this.request<void>('PUT', `/recycle-bin/${deletionId}`);
   }
 
   async permanentlyDelete(deletionId: number): Promise<void> {
-    await this.request<void>({
-      method: 'DELETE',
-      url: `/recycle-bin/${deletionId}`,
-    });
+    await this.request<void>('DELETE', `/recycle-bin/${deletionId}`);
   }
 
   // Content Permissions API
   async getContentPermissions(contentType: ContentType, contentId: number): Promise<ContentPermissions> {
-    return this.request<ContentPermissions>({
-      method: 'GET',
-      url: `/content-permissions/${contentType}/${contentId}`,
-    });
+    return this.request<ContentPermissions>('GET', `/content-permissions/${contentType}/${contentId}`);
   }
 
   async updateContentPermissions(
@@ -559,28 +406,17 @@ export class BookStackClient implements BookStackAPIClient {
     contentId: number,
     params: UpdateContentPermissionsParams
   ): Promise<ContentPermissions> {
-    return this.request<ContentPermissions>({
-      method: 'PUT',
-      url: `/content-permissions/${contentType}/${contentId}`,
-      data: params,
-    });
+    return this.request<ContentPermissions>('PUT', `/content-permissions/${contentType}/${contentId}`, params);
   }
 
   // Audit Log API
   async listAuditLog(params?: AuditLogListParams): Promise<ListResponse<AuditLogEntry>> {
-    return this.request<ListResponse<AuditLogEntry>>({
-      method: 'GET',
-      url: '/audit-log',
-      params,
-    });
+    return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, params as Record<string, unknown>);
   }
 
   // System API
   async getSystemInfo(): Promise<SystemInfo> {
-    return this.request<SystemInfo>({
-      method: 'GET',
-      url: '/system',
-    });
+    return this.request<SystemInfo>('GET', '/system');
   }
 }
 
