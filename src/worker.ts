@@ -111,6 +111,19 @@ export default {
       return json(oauthMetadata(baseUrl));
     }
 
+    // OAuth protected resource metadata (RFC 9728) — tells clients which auth server protects this resource
+    if (
+      (url.pathname === '/.well-known/oauth-protected-resource' ||
+       url.pathname.startsWith('/.well-known/oauth-protected-resource/')) &&
+      request.method === 'GET'
+    ) {
+      return json({
+        resource: baseUrl,
+        authorization_servers: [baseUrl],
+        bearer_methods_supported: ['header'],
+      });
+    }
+
     // OAuth authorization endpoint — show login page (GET) or process it (POST)
     if (url.pathname === '/oauth/authorize') {
       const apiKey = env.MCP_API_KEY;
