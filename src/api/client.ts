@@ -469,6 +469,7 @@ export class BookStackClient implements BookStackAPIClient {
   // Audit Log API
   async listAuditLog(params?: AuditLogListParams): Promise<ListResponse<AuditLogEntry>> {
     let mapped: Record<string, unknown> = { ...(params as any) };
+    console.log('[audit] raw params filter:', JSON.stringify((params as any)?.filter));
     if (mapped.filter && typeof mapped.filter === 'object') {
       const f = { ...(mapped.filter as any) };
 
@@ -480,6 +481,7 @@ export class BookStackClient implements BookStackAPIClient {
       // date_from / date_to stay under filter → serialised as filter[date_from] etc.
       mapped = { ...mapped, filter: f };
     }
+    console.log('[audit] mapped filter:', JSON.stringify((mapped as any).filter));
     return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, mapped);
   }
 

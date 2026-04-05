@@ -149,6 +149,7 @@ export class SearchTools {
         // When there is no text query, BookStack's search API ignores filter operators.
         // Route to list endpoints + client-side tag filtering instead.
         if (!textQuery && f.tag) {
+          console.log('[search] tag-only path, f:', JSON.stringify(f));
           return await this.tagOnlySearch(f, params.count ?? 20, params.include_content ?? false);
         }
 
