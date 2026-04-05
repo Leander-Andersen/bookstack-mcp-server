@@ -146,13 +146,6 @@ export class SearchTools {
         // Treat "*" as empty — BookStack doesn't support wildcards and returns 0 results.
         const textQuery = (params.query ?? '').trim().replace(/^\*+$/, '');
 
-        // When there is no text query, BookStack's search API ignores filter operators.
-        // Route to list endpoints + client-side tag filtering instead.
-        if (!textQuery && f.tag) {
-          console.log('[search] tag-only path, f:', JSON.stringify(f));
-          return await this.tagOnlySearch(f, params.count ?? 20, params.include_content ?? false);
-        }
-
         // Build final query by merging structured filters into the query string
         let finalQuery = textQuery;
 
@@ -222,73 +215,6 @@ export class SearchTools {
     };
   }
 
-  /**
-   * Tag-only search: BookStack's search API ignores filter operators when the
-   * query has no text. Instead, fetch all items of the relevant type(s) and
-   * filter client-side by tag name/value.
-   */
-  private async tagOnlySearch(
-    f: { type?: string; tag?: { name?: string; value?: string } },
-    count: number,
-    includeContent: boolean,
-  ): Promise<{ data: unknown[]; total: number }> {
-    const typeToPath: Record<string, string> = {
-      page: '/pages', book: '/books', chapter: '/chapters', shelf: '/shelves',
-    };
-
-    const paths = f.type
-      ? [typeToPath[f.type] ?? '/pages']
-      : ['/pages', '/books', '/chapters', '/shelves'];
-
-    const types = f.type
-      ? [f.type]
-      : ['page', 'book', 'chapter', 'shelf'];
-
-    // Fetch all items for each type in parallel
-    const allItemSets = await Promise.all(
-      paths.map(path => (this.client as any).fetchAll(path, { sort: 'updated_at' }))
-    );
-
-    // Filter by tag and convert to search-result shape
-    const tagName  = f.tag?.name?.toLowerCase();
-    const tagValue = f.tag?.value?.toLowerCase();
-
-    const matched: unknown[] = [];
-    for (let i = 0; i < allItemSets.length; i++) {
-      const contentType = types[i];
-      for (const item of allItemSets[i] as any[]) {
-        const tags: any[] = item.tags ?? [];
-        const hasTag = tags.some(t =>
-          (!tagName  || t.name?.toLowerCase()  === tagName) &&
-          (!tagValue || t.value?.toLowerCase() === tagValue)
-        );
-        if (!hasTag) continue;
-
-        const result: any = {
-          id: item.id,
-          name: item.name,
-          type: contentType,
-          url: item.url ?? '',
-          preview_html: { content: '' },
-          tags,
-        };
-
-        if (includeContent && contentType === 'page') {
-          try {
-            const full = await (this.client as any).getPage(item.id);
-            result.content = {
-              markdown: full.markdown || htmlToPlainText(full.html || ''),
-              html: full.html,
-            };
-          } catch { /* fall through */ }
-        }
-
-        matched.push(result);
-      }
-    }
-
-    return { data: matched.slice(0, count), total: matched.length };
-  }
 }
 
 export default SearchTools;
