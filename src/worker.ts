@@ -191,11 +191,13 @@ export default {
       }
 
       const valid = await validateAuthCode(apiKey, code, codeVerifier);
+      console.log('[oauth/token] validateAuthCode result:', valid, 'grant_type:', grantType, 'code_len:', code.length, 'verifier_len:', codeVerifier.length);
       if (!valid) {
         return json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
       }
 
       const accessToken = await generateAccessToken(apiKey);
+      console.log('[oauth/token] issued token, first 20 chars:', accessToken.slice(0, 20));
       return json({
         access_token: accessToken,
         token_type: 'Bearer',
@@ -209,6 +211,7 @@ export default {
     if (!apiKey) return json({ error: 'server_error' }, 500);
 
     const authHeader = request.headers.get('Authorization') ?? '';
+    console.log('[auth] path:', url.pathname, 'has_bearer:', authHeader.startsWith('Bearer '));
     if (!authHeader.startsWith('Bearer ')) {
       return new Response('Unauthorized', {
         status: 401,
@@ -218,6 +221,7 @@ export default {
 
     const token = authHeader.slice('Bearer '.length);
     const tokenValid = await validateAccessToken(apiKey, token);
+    console.log('[auth] validateAccessToken result:', tokenValid, 'token_first_20:', token.slice(0, 20));
     if (!tokenValid) {
       return new Response('Unauthorized', {
         status: 401,
@@ -230,8 +234,8 @@ export default {
       return new Response('Not Found', { status: 404 });
     }
 
-    if (request.method !== 'POST') {
-      return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
+    if (request.method !== 'POST' && request.method !== 'GET' && request.method !== 'DELETE') {
+      return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, POST, DELETE' } });
     }
 
     // Seed process.env + reset ConfigManager so server-info.ts tools work
@@ -239,10 +243,12 @@ export default {
     ConfigManager.reset();
 
     let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return new Response('Bad Request: invalid JSON', { status: 400 });
+    if (request.method === 'POST') {
+      try {
+        body = await request.json();
+      } catch {
+        return new Response('Bad Request: invalid JSON', { status: 400 });
+      }
     }
 
     const config = buildConfigFromEnv(env);
