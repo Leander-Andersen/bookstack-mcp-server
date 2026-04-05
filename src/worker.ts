@@ -17,7 +17,7 @@ export type { WorkerEnv as Env };
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SERVER_VERSION = '1.2.0';
+const SERVER_VERSION = '1.2.1';
 const VERSION_HEADER = { 'X-MCP-Server-Version': SERVER_VERSION };
 
 function json(data: unknown, status = 200): Response {

@@ -64,7 +64,7 @@ export class ShelfTools {
             properties: {
               name: {
                 type: 'string',
-                description: 'Filter by shelf name (exact match). For partial/fuzzy matching use bookstack_search with {type:shelf}.',
+                description: 'Filter by shelf name (partial match, case-insensitive).',
               },
               created_by: {
                 type: 'integer',

@@ -65,7 +65,7 @@ export class BookTools {
             properties: {
               name: {
                 type: 'string',
-                description: 'Filter by book name (exact match). For partial/fuzzy matching use bookstack_search with {type:book}.',
+                description: 'Filter by book name (partial match, case-insensitive).',
               },
               created_by: {
                 type: 'integer',

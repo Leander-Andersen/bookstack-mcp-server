@@ -205,9 +205,57 @@ export class BookStackClient implements BookStackAPIClient {
     }
   }
 
+  /**
+   * Fetch every item from a paginated list endpoint, splitting into parallel
+   * batches of `pageSize` once the first response reveals the total count.
+   */
+  private async fetchAll<T>(path: string, params: Record<string, unknown>, pageSize = 500): Promise<T[]> {
+    const first = await this.request<ListResponse<T>>('GET', path, undefined, { ...params, count: pageSize, offset: 0 });
+    const all: T[] = [...first.data];
+
+    if (first.total > pageSize) {
+      const extraPages = Math.ceil((first.total - pageSize) / pageSize);
+      const requests = Array.from({ length: extraPages }, (_, i) =>
+        this.request<ListResponse<T>>('GET', path, undefined, { ...params, count: pageSize, offset: (i + 1) * pageSize })
+      );
+      const pages = await Promise.all(requests);
+      for (const page of pages) all.push(...page.data);
+    }
+
+    return all;
+  }
+
+  /**
+   * List with optional client-side name filtering (partial, case-insensitive).
+   * When filter.name is present we fetch all items and match locally because
+   * BookStack's filter[name] only supports exact match.
+   */
+  private async listWithNameFilter<T extends { name: string }>(
+    path: string,
+    params: Record<string, unknown>
+  ): Promise<ListResponse<T>> {
+    const filter = (params.filter ?? {}) as Record<string, unknown>;
+    const nameQuery = filter.name as string | undefined;
+
+    if (!nameQuery) {
+      return this.request<ListResponse<T>>('GET', path, undefined, params);
+    }
+
+    // Strip name from filter before hitting the API
+    const { name: _n, ...restFilter } = filter;
+    const apiParams = Object.keys(restFilter).length > 0
+      ? { ...params, filter: restFilter }
+      : (({ filter: _f, ...rest }) => rest)(params);
+
+    const all = await this.fetchAll<T>(path, apiParams);
+    const needle = nameQuery.toLowerCase();
+    const matched = all.filter(item => item.name.toLowerCase().includes(needle));
+    return { data: matched, total: matched.length };
+  }
+
   // Books API
   async listBooks(params?: BooksListParams): Promise<ListResponse<Book>> {
-    return this.request<ListResponse<Book>>('GET', '/books', undefined, params as unknown as Record<string, unknown>);
+    return this.listWithNameFilter<Book>('/books', params as unknown as Record<string, unknown> ?? {});
   }
 
   async createBook(params: CreateBookParams): Promise<Book> {
@@ -282,7 +330,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Shelves API
   async listShelves(params?: ShelvesListParams): Promise<ListResponse<Bookshelf>> {
-    return this.request<ListResponse<Bookshelf>>('GET', '/shelves', undefined, params as unknown as Record<string, unknown>);
+    return this.listWithNameFilter<Bookshelf>('/shelves', params as unknown as Record<string, unknown> ?? {});
   }
 
   async createShelf(params: CreateShelfParams): Promise<Bookshelf> {
