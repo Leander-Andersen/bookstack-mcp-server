@@ -198,7 +198,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Books API
   async listBooks(params?: BooksListParams): Promise<ListResponse<Book>> {
-    return this.request<ListResponse<Book>>('GET', '/books', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Book>>('GET', '/books', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createBook(params: CreateBookParams): Promise<Book> {
@@ -223,7 +223,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Pages API
   async listPages(params?: PagesListParams): Promise<ListResponse<Page>> {
-    return this.request<ListResponse<Page>>('GET', '/pages', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Page>>('GET', '/pages', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createPage(params: CreatePageParams): Promise<Page> {
@@ -248,7 +248,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Chapters API
   async listChapters(params?: ChaptersListParams): Promise<ListResponse<Chapter>> {
-    return this.request<ListResponse<Chapter>>('GET', '/chapters', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Chapter>>('GET', '/chapters', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createChapter(params: CreateChapterParams): Promise<Chapter> {
@@ -273,7 +273,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Shelves API
   async listShelves(params?: ShelvesListParams): Promise<ListResponse<Bookshelf>> {
-    return this.request<ListResponse<Bookshelf>>('GET', '/shelves', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Bookshelf>>('GET', '/shelves', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createShelf(params: CreateShelfParams): Promise<Bookshelf> {
@@ -294,7 +294,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Users API
   async listUsers(params?: UsersListParams): Promise<ListResponse<User>> {
-    return this.request<ListResponse<User>>('GET', '/users', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<User>>('GET', '/users', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createUser(params: CreateUserParams): Promise<User> {
@@ -316,7 +316,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Roles API
   async listRoles(params?: RolesListParams): Promise<ListResponse<Role>> {
-    return this.request<ListResponse<Role>>('GET', '/roles', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Role>>('GET', '/roles', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createRole(params: CreateRoleParams): Promise<Role> {
@@ -338,7 +338,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Attachments API
   async listAttachments(params?: AttachmentsListParams): Promise<ListResponse<Attachment>> {
-    return this.request<ListResponse<Attachment>>('GET', '/attachments', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Attachment>>('GET', '/attachments', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createAttachment(params: CreateAttachmentParams): Promise<Attachment> {
@@ -359,7 +359,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Images API
   async listImages(params?: ImageGalleryListParams): Promise<ListResponse<Image>> {
-    return this.request<ListResponse<Image>>('GET', '/image-gallery', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<Image>>('GET', '/image-gallery', undefined, params as unknown as Record<string, unknown>);
   }
 
   async createImage(params: CreateImageParams): Promise<Image> {
@@ -380,12 +380,12 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Search API
   async search(params: SearchParams): Promise<ListResponse<SearchResult>> {
-    return this.request<ListResponse<SearchResult>>('GET', '/search', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<SearchResult>>('GET', '/search', undefined, params as unknown as Record<string, unknown>);
   }
 
   // Recycle Bin API
   async listRecycleBin(params?: PaginationParams): Promise<ListResponse<RecycleBinItem>> {
-    return this.request<ListResponse<RecycleBinItem>>('GET', '/recycle-bin', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<RecycleBinItem>>('GET', '/recycle-bin', undefined, params as unknown as Record<string, unknown>);
   }
 
   async restoreFromRecycleBin(deletionId: number): Promise<void> {
@@ -411,7 +411,7 @@ export class BookStackClient implements BookStackAPIClient {
 
   // Audit Log API
   async listAuditLog(params?: AuditLogListParams): Promise<ListResponse<AuditLogEntry>> {
-    return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, params as Record<string, unknown>);
+    return this.request<ListResponse<AuditLogEntry>>('GET', '/audit-log', undefined, params as unknown as Record<string, unknown>);
   }
 
   // System API
