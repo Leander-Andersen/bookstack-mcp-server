@@ -1,9 +1,4 @@
-#!/usr/bin/env node
-
-import express from 'express';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolRequestSchema,
@@ -326,63 +321,6 @@ export class BookStackMCPServer {
   }
 }
 
-// Start server if run directly
-if (typeof module !== 'undefined' && require.main === module) {
-  const transport = process.env.MCP_TRANSPORT || 'http';
-
-  if (transport === 'stdio') {
-    const server = new BookStackMCPServer();
-    const stdioTransport = new StdioServerTransport();
-    
-    server.connect(stdioTransport).catch((error) => {
-      console.error('Failed to start server:', error);
-      process.exit(1);
-    });
-
-    console.error('BookStack MCP Server started and listening on stdio');
-
-    // Handle graceful shutdown
-    process.on('SIGINT', () => server.shutdown());
-    process.on('SIGTERM', () => server.shutdown());
-  } else {
-    const app = express();
-    app.use(express.json());
-    const config = ConfigManager.getInstance().getConfig();
-
-    app.post('/message', async (req, res) => {
-      try {
-        // Extract BookStack URL and Token from headers
-        const bookstackUrl = req.headers['x-bookstack-url'] as string;
-        const bookstackToken = req.headers['x-bookstack-token'] as string;
-
-        const configOverrides: Partial<Config> = {
-          bookstack: {
-            baseUrl: bookstackUrl || config.bookstack.baseUrl,
-            apiToken: bookstackToken || config.bookstack.apiToken,
-            timeout: config.bookstack.timeout
-          }
-        };
-
-        const server = new BookStackMCPServer(configOverrides);
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-          enableJsonResponse: true,
-        });
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
-      } catch (error) {
-        console.error('Error handling request:', error);
-        if (!res.headersSent) {
-          res.status(500).send('Internal Server Error');
-        }
-      }
-    });
-
-    const port = config.server.port || 3000;
-    app.listen(port, () => {
-      console.log(`BookStack MCP Server listening on port ${port}`);
-    });
-  }
-}
+export default BookStackMCPServer;
 
 export default BookStackMCPServer;

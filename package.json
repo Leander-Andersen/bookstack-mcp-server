@@ -2,10 +2,10 @@
   "name": "bookstack-mcp-server",
   "version": "1.0.0",
   "description": "MCP server providing comprehensive access to BookStack knowledge management system",
-  "main": "dist/server.js",
+  "main": "dist/server-node.js",
   "scripts": {
     "build": "npm run clean && tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/server-node.js",
     "prepublishOnly": "npm run build",
     "dev": "ts-node src/server.ts",
     "watch": "nodemon --exec ts-node src/server.ts",
@@ -72,7 +72,7 @@
     "npm": ">=9.0.0"
   },
   "bin": {
-    "bookstack-mcp-server": "./dist/server.js"
+    "bookstack-mcp-server": "./dist/server-node.js"
   },
   "preferGlobal": true,
   "files": [
