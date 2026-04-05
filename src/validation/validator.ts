@@ -259,7 +259,7 @@ const ValidationSchemas = {
 
   // Search
   search: z.object({
-    query: z.string().min(1),
+    query: z.string().default(''),
     page: z.number().min(1).default(1),
     count: z.number().min(1).max(100).default(20),
   }),
@@ -274,6 +274,8 @@ const ValidationSchemas = {
       user_id: z.number().optional(),
       entity_type: z.string().optional(),
       entity_id: z.number().optional(),
+      date_from: z.string().optional(),
+      date_to: z.string().optional(),
     }).optional(),
   }),
 

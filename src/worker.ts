@@ -17,17 +17,20 @@ export type { WorkerEnv as Env };
 // Helpers
 // ---------------------------------------------------------------------------
 
+const SERVER_VERSION = '1.2.0';
+const VERSION_HEADER = { 'X-MCP-Server-Version': SERVER_VERSION };
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...VERSION_HEADER },
   });
 }
 
 function html(body: string, status = 200): Response {
   return new Response(body, {
     status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: { 'Content-Type': 'text/html; charset=utf-8', ...VERSION_HEADER },
   });
 }
 
@@ -41,7 +44,7 @@ async function handleMCPRequest(
   body: unknown,
 ): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...VERSION_HEADER };
     let statusCode = 200;
     let responseBody = '';
     let settled = false;
@@ -212,13 +215,11 @@ export default {
       }
 
       const valid = await validateAuthCode(apiKey, code, codeVerifier);
-      console.log('[oauth/token] validateAuthCode result:', valid, 'grant_type:', grantType, 'code_len:', code.length, 'verifier_len:', codeVerifier.length);
       if (!valid) {
         return json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
       }
 
       const accessToken = await generateAccessToken(apiKey);
-      console.log('[oauth/token] issued token, first 20 chars:', accessToken.slice(0, 20));
       return json({
         access_token: accessToken,
         token_type: 'Bearer',
@@ -232,31 +233,29 @@ export default {
     if (!apiKey) return json({ error: 'server_error' }, 500);
 
     const authHeader = request.headers.get('Authorization') ?? '';
-    console.log('[auth] path:', url.pathname, 'has_bearer:', authHeader.startsWith('Bearer '));
     if (!authHeader.startsWith('Bearer ')) {
       return new Response('Unauthorized', {
         status: 401,
-        headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP"' },
+        headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP"', ...VERSION_HEADER },
       });
     }
 
     const token = authHeader.slice('Bearer '.length);
     const tokenValid = await validateAccessToken(apiKey, token);
-    console.log('[auth] validateAccessToken result:', tokenValid, 'token_first_20:', token.slice(0, 20));
     if (!tokenValid) {
       return new Response('Unauthorized', {
         status: 401,
-        headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP", error="invalid_token"' },
+        headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP", error="invalid_token"', ...VERSION_HEADER },
       });
     }
 
     // MCP endpoint
     if (url.pathname !== '/mcp' && url.pathname !== '/message') {
-      return new Response('Not Found', { status: 404 });
+      return new Response('Not Found', { status: 404, headers: VERSION_HEADER });
     }
 
     if (request.method !== 'POST' && request.method !== 'GET' && request.method !== 'DELETE') {
-      return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, POST, DELETE' } });
+      return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, POST, DELETE', ...VERSION_HEADER } });
     }
 
     // Seed process.env + reset ConfigManager so server-info.ts tools work
