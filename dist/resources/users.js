@@ -13,7 +13,7 @@ class UserResources {
                 name: 'Users',
                 description: 'All users in the BookStack instance',
                 mimeType: 'application/json',
-                handler: async (uri) => await this.client.listUsers(),
+                handler: async (_uri) => await this.client.listUsers(),
             },
             {
                 uri: 'bookstack://users/{id}',

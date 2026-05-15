@@ -13,7 +13,7 @@ class ShelfResources {
                 name: 'Shelves',
                 description: 'All bookshelves in the BookStack instance',
                 mimeType: 'application/json',
-                handler: async (uri) => await this.client.listShelves(),
+                handler: async (_uri) => await this.client.listShelves(),
             },
             {
                 uri: 'bookstack://shelves/{id}',
