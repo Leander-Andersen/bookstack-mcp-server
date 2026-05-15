@@ -1,3 +1,4 @@
+/// <reference types="@cloudflare/workers-types" />
 import { Config } from './manager';
 
 /**
@@ -9,6 +10,14 @@ export interface WorkerEnv {
   MCP_API_KEY: string;
   SERVER_NAME?: string;
   SERVER_VERSION?: string;
+  /**
+   * Shared KV namespace. Key prefixes:
+   *   - `code-used:{nonce}`  → OAuth single-use auth-code enforcement (CRIT-1)
+   *   - `cache:{...}`        → future BookStack response caching
+   * Marked optional so the Worker still functions if the binding is missing —
+   * but in that case auth codes are replayable for their 5-minute TTL.
+   */
+  BOOKSTACK_KV?: KVNamespace;
 }
 
 /**
@@ -33,7 +42,7 @@ export function buildConfigFromEnv(env: WorkerEnv): Config {
     },
     validation: {
       enabled: true,
-      strictMode: false,
+      strictMode: true,
     },
     logging: {
       level: 'info',

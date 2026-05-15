@@ -60,7 +60,7 @@ class ShelfTools {
                         properties: {
                             name: {
                                 type: 'string',
-                                description: 'Filter by shelf name (partial match)',
+                                description: 'Filter by shelf name (partial match, case-insensitive).',
                             },
                             created_by: {
                                 type: 'integer',

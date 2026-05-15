@@ -5,28 +5,38 @@ import { BookStackAPIClient, Book, BookWithContents, Page, PageWithContent, Chap
 /**
  * BookStack API Client
  *
- * Provides a comprehensive wrapper around the BookStack REST API
- * with built-in error handling, rate limiting, and retry logic.
+ * Wraps the BookStack REST API using the native fetch API,
+ * compatible with both Cloudflare Workers and Node.js 18+.
  */
 export declare class BookStackClient implements BookStackAPIClient {
-    private client;
     private logger;
     private errorHandler;
-    private rateLimiter;
     private config;
+    private baseHeaders;
     constructor(config: Config, logger: Logger, errorHandler: ErrorHandler);
     /**
-     * Setup request and response interceptors
-     */
-    private setupInterceptors;
-    /**
-     * Generic request method with retry logic
+     * Generic JSON request method
      */
     private request;
+    /**
+     * Request that returns raw text (used for export endpoints)
+     */
+    private requestText;
     /**
      * Health check method
      */
     healthCheck(): Promise<boolean>;
+    /**
+     * Fetch every item from a paginated list endpoint, splitting into parallel
+     * batches of `pageSize` once the first response reveals the total count.
+     */
+    fetchAll<T>(path: string, params: Record<string, unknown>, pageSize?: number): Promise<T[]>;
+    /**
+     * List with optional client-side name filtering (partial, case-insensitive).
+     * When filter.name is present we fetch all items and match locally because
+     * BookStack's filter[name] only supports exact match.
+     */
+    private listWithNameFilter;
     listBooks(params?: BooksListParams): Promise<ListResponse<Book>>;
     createBook(params: CreateBookParams): Promise<Book>;
     getBook(id: number): Promise<BookWithContents>;

@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Config } from './config/manager';
 /**

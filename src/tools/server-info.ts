@@ -1,4 +1,3 @@
-import { ConfigManager } from '../config/manager';
 import { Logger } from '../utils/logger';
 import { MCPTool, MCPServerInfo, ToolCategory, ResourceType, ServerUsageExample, ErrorHandlingInfo } from '../types';
 
@@ -67,8 +66,7 @@ export class ServerInfoTools {
       ],
       handler: async (params: any) => {
         const section = params.section || 'all';
-        const config = ConfigManager.getInstance().getConfig();
-        
+
         const serverInfo: MCPServerInfo = {
           name: 'BookStack MCP Server',
           version: '1.0.0',
@@ -89,15 +87,6 @@ export class ServerInfoTools {
             authentication: {
               required: true,
               methods: ['API Token'],
-            },
-            rate_limiting: {
-              enabled: !!config.rateLimit,
-              requests_per_minute: config.rateLimit?.requestsPerMinute,
-              burst_limit: config.rateLimit?.burstLimit,
-            },
-            validation: {
-              enabled: config.validation?.enabled || true,
-              strict_mode: config.validation?.strictMode || false,
             },
           },
           tool_categories: this.getToolCategories(),

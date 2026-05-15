@@ -374,12 +374,14 @@ export interface UpdateUserParams {
 export interface CreateRoleParams {
     display_name: string;
     description?: string;
+    external_auth_id?: string;
     permissions?: string[];
     mfa_enforced?: boolean;
 }
 export interface UpdateRoleParams {
     display_name?: string;
     description?: string;
+    external_auth_id?: string;
     permissions?: string[];
     mfa_enforced?: boolean;
 }
@@ -405,13 +407,20 @@ export interface UpdateImageParams {
     image?: string;
 }
 export interface UpdateContentPermissionsParams {
-    permissions: {
+    role_permissions?: {
         role_id: number;
         view: boolean;
         create: boolean;
         update: boolean;
         delete: boolean;
     }[];
+    fallback_permissions?: {
+        inheriting: boolean;
+        view?: boolean;
+        create?: boolean;
+        update?: boolean;
+        delete?: boolean;
+    };
 }
 export interface MCPTool {
     name: string;
@@ -545,12 +554,12 @@ export interface MCPServerCapabilities {
         required: boolean;
         methods: string[];
     };
-    rate_limiting: {
+    rate_limiting?: {
         enabled: boolean;
         requests_per_minute?: number;
         burst_limit?: number;
     };
-    validation: {
+    validation?: {
         enabled: boolean;
         strict_mode: boolean;
     };

@@ -653,12 +653,12 @@ export interface MCPServerCapabilities {
     required: boolean;
     methods: string[];
   };
-  rate_limiting: {
+  rate_limiting?: {
     enabled: boolean;
     requests_per_minute?: number;
     burst_limit?: number;
   };
-  validation: {
+  validation?: {
     enabled: boolean;
     strict_mode: boolean;
   };

@@ -53,11 +53,11 @@ export declare const ConfigSchema: z.ZodObject<{
         level: z.ZodDefault<z.ZodEnum<["error", "warn", "info", "debug"]>>;
         format: z.ZodDefault<z.ZodEnum<["json", "pretty"]>>;
     }, "strip", z.ZodTypeAny, {
-        format: "pretty" | "json";
-        level: "info" | "error" | "warn" | "debug";
+        level: "debug" | "info" | "warn" | "error";
+        format: "json" | "pretty";
     }, {
-        format?: "pretty" | "json" | undefined;
-        level?: "info" | "error" | "warn" | "debug" | undefined;
+        level?: "debug" | "info" | "warn" | "error" | undefined;
+        format?: "json" | "pretty" | undefined;
     }>;
     context7: z.ZodObject<{
         enabled: z.ZodDefault<z.ZodBoolean>;
@@ -115,8 +115,8 @@ export declare const ConfigSchema: z.ZodObject<{
         burstLimit: number;
     };
     logging: {
-        format: "pretty" | "json";
-        level: "info" | "error" | "warn" | "debug";
+        level: "debug" | "info" | "warn" | "error";
+        format: "json" | "pretty";
     };
     context7: {
         enabled: boolean;
@@ -152,8 +152,8 @@ export declare const ConfigSchema: z.ZodObject<{
         burstLimit?: number | undefined;
     };
     logging: {
-        format?: "pretty" | "json" | undefined;
-        level?: "info" | "error" | "warn" | "debug" | undefined;
+        level?: "debug" | "info" | "warn" | "error" | undefined;
+        format?: "json" | "pretty" | undefined;
     };
     context7: {
         enabled?: boolean | undefined;
@@ -180,6 +180,11 @@ export declare class ConfigManager {
     private logger;
     private constructor();
     static getInstance(): ConfigManager;
+    /**
+     * Reset the singleton — used by the Cloudflare Worker to re-initialize
+     * config on each request after seeding process.env from Worker secrets.
+     */
+    static reset(): void;
     /**
      * Load and validate configuration from environment variables
      */

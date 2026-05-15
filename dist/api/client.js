@@ -1,95 +1,117 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BookStackClient = void 0;
-const axios_1 = __importDefault(require("axios"));
-const https_1 = require("https");
-const rateLimit_1 = require("../utils/rateLimit");
 /**
  * BookStack API Client
  *
- * Provides a comprehensive wrapper around the BookStack REST API
- * with built-in error handling, rate limiting, and retry logic.
+ * Wraps the BookStack REST API using the native fetch API,
+ * compatible with both Cloudflare Workers and Node.js 18+.
  */
 class BookStackClient {
     constructor(config, logger, errorHandler) {
         this.config = config;
         this.logger = logger;
         this.errorHandler = errorHandler;
-        this.rateLimiter = new rateLimit_1.RateLimiter(config.rateLimit);
-        // Create HTTP agent for connection pooling
-        const httpsAgent = new https_1.Agent({
-            keepAlive: true,
-            maxSockets: 10,
-            timeout: config.bookstack.timeout,
-        });
-        // Initialize Axios client
-        this.client = axios_1.default.create({
-            baseURL: config.bookstack.baseUrl,
-            timeout: config.bookstack.timeout,
-            httpsAgent,
-            headers: {
-                'Authorization': `Token ${config.bookstack.apiToken}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'User-Agent': `${config.server.name}/${config.server.version}`,
-            },
-        });
-        this.setupInterceptors();
+        this.baseHeaders = {
+            'Authorization': `Token ${config.bookstack.apiToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': `${config.server.name}/${config.server.version}`,
+        };
         this.logger.info('BookStack API client initialized', {
             baseUrl: config.bookstack.baseUrl,
             timeout: config.bookstack.timeout,
         });
     }
     /**
-     * Setup request and response interceptors
+     * Generic JSON request method
      */
-    setupInterceptors() {
-        // Request interceptor for rate limiting and logging
-        this.client.interceptors.request.use(async (config) => {
-            // Apply rate limiting
-            await this.rateLimiter.acquire();
-            this.logger.debug('API request', {
-                method: config.method?.toUpperCase(),
-                url: config.url,
-                params: config.params,
-            });
-            return config;
-        }, (error) => {
-            this.logger.error('Request interceptor error', error);
-            return Promise.reject(error);
-        });
-        // Response interceptor for error handling and logging
-        this.client.interceptors.response.use((response) => {
-            this.logger.debug('API response', {
-                status: response.status,
-                url: response.config.url,
-                dataLength: JSON.stringify(response.data).length,
-            });
-            return response;
-        }, (error) => {
-            this.logger.error('API error', {
-                status: error.response?.status,
-                url: error.config?.url,
-                message: error.message,
-                data: error.response?.data,
-            });
-            return Promise.reject(this.errorHandler.handleAxiosError(error));
-        });
-    }
-    /**
-     * Generic request method with retry logic
-     */
-    async request(config) {
+    async request(method, path, data, params) {
+        let url = `${this.config.bookstack.baseUrl}${path}`;
+        if (params && Object.keys(params).length > 0) {
+            const parts = [];
+            for (const [k, v] of Object.entries(params)) {
+                if (v === undefined || v === null)
+                    continue;
+                if (typeof v === 'object' && !Array.isArray(v)) {
+                    // Flatten nested objects as PHP bracket notation: filter[name]=foo
+                    // Use literal brackets (not %5B%5D) so BookStack/Laravel parses them correctly.
+                    for (const [subK, subV] of Object.entries(v)) {
+                        if (subV !== undefined && subV !== null) {
+                            parts.push(`${k}[${subK}]=${encodeURIComponent(String(subV))}`);
+                        }
+                    }
+                }
+                else {
+                    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+                }
+            }
+            if (parts.length > 0)
+                url += '?' + parts.join('&');
+        }
+        this.logger.debug('API request', { method, url });
+        const init = {
+            method,
+            headers: this.baseHeaders,
+            signal: AbortSignal.timeout(this.config.bookstack.timeout),
+        };
+        if (data !== undefined) {
+            init.body = JSON.stringify(data);
+        }
+        let response;
         try {
-            const response = await this.client.request(config);
-            return response.data;
+            response = await fetch(url, init);
+        }
+        catch (error) {
+            this.logger.error('Fetch network error', { url, method, error: String(error) });
+            throw this.errorHandler.handleError(error);
+        }
+        this.logger.debug('API response', { status: response.status, url });
+        if (!response.ok) {
+            const body = await response.text();
+            throw this.errorHandler.handleFetchError(response.status, url, method, body);
+        }
+        if (response.status === 204) {
+            return undefined;
+        }
+        try {
+            return await response.json();
         }
         catch (error) {
             throw this.errorHandler.handleError(error);
         }
+    }
+    /**
+     * Request that returns raw text (used for export endpoints)
+     */
+    async requestText(method, path) {
+        const url = `${this.config.bookstack.baseUrl}${path}`;
+        this.logger.debug('API export request', { method, url });
+        let response;
+        try {
+            response = await fetch(url, {
+                method,
+                headers: this.baseHeaders,
+                signal: AbortSignal.timeout(this.config.bookstack.timeout),
+            });
+        }
+        catch (error) {
+            this.logger.error('Fetch network error', { url, method, error: String(error) });
+            throw this.errorHandler.handleError(error);
+        }
+        if (!response.ok) {
+            const body = await response.text();
+            throw this.errorHandler.handleFetchError(response.status, url, method, body);
+        }
+        const content = await response.text();
+        const mimeType = response.headers.get('content-type') ?? 'application/octet-stream';
+        const parts = path.split('/');
+        const format = parts[parts.length - 1];
+        return {
+            content,
+            filename: `export.${format}`,
+            mime_type: mimeType,
+        };
     }
     /**
      * Health check method
@@ -104,356 +126,248 @@ class BookStackClient {
             return false;
         }
     }
+    /**
+     * Fetch every item from a paginated list endpoint, splitting into parallel
+     * batches of `pageSize` once the first response reveals the total count.
+     */
+    async fetchAll(path, params, pageSize = 500) {
+        const first = await this.request('GET', path, undefined, { ...params, count: pageSize, offset: 0 });
+        const all = [...first.data];
+        if (first.total > pageSize) {
+            const extraPages = Math.ceil((first.total - pageSize) / pageSize);
+            const requests = Array.from({ length: extraPages }, (_, i) => this.request('GET', path, undefined, { ...params, count: pageSize, offset: (i + 1) * pageSize }));
+            const pages = await Promise.all(requests);
+            for (const page of pages)
+                all.push(...page.data);
+        }
+        return all;
+    }
+    /**
+     * List with optional client-side name filtering (partial, case-insensitive).
+     * When filter.name is present we fetch all items and match locally because
+     * BookStack's filter[name] only supports exact match.
+     */
+    async listWithNameFilter(path, params) {
+        const filter = (params.filter ?? {});
+        const nameQuery = filter.name;
+        if (!nameQuery) {
+            return this.request('GET', path, undefined, params);
+        }
+        // Strip name from filter before hitting the API
+        const { name: _n, ...restFilter } = filter;
+        const apiParams = Object.keys(restFilter).length > 0
+            ? { ...params, filter: restFilter }
+            : (({ filter: _f, ...rest }) => rest)(params);
+        const all = await this.fetchAll(path, apiParams);
+        const needle = nameQuery.toLowerCase();
+        const matched = all.filter(item => item.name.toLowerCase().includes(needle));
+        return { data: matched, total: matched.length };
+    }
     // Books API
     async listBooks(params) {
-        return this.request({
-            method: 'GET',
-            url: '/books',
-            params,
-        });
+        return this.listWithNameFilter('/books', params ?? {});
     }
     async createBook(params) {
-        return this.request({
-            method: 'POST',
-            url: '/books',
-            data: params,
-        });
+        return this.request('POST', '/books', params);
     }
     async getBook(id) {
-        return this.request({
-            method: 'GET',
-            url: `/books/${id}`,
-        });
+        return this.request('GET', `/books/${id}`);
     }
     async updateBook(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/books/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/books/${id}`, params);
     }
     async deleteBook(id) {
-        await this.request({
-            method: 'DELETE',
-            url: `/books/${id}`,
-        });
+        await this.request('DELETE', `/books/${id}`);
     }
     async exportBook(id, format) {
-        return this.request({
-            method: 'GET',
-            url: `/books/${id}/export/${format}`,
-        });
+        return this.requestText('GET', `/books/${id}/export/${format}`);
     }
     // Pages API
     async listPages(params) {
-        return this.request({
-            method: 'GET',
-            url: '/pages',
-            params,
-        });
+        return this.request('GET', '/pages', undefined, params);
     }
     async createPage(params) {
-        return this.request({
-            method: 'POST',
-            url: '/pages',
-            data: params,
-        });
+        return this.request('POST', '/pages', params);
     }
     async getPage(id) {
-        return this.request({
-            method: 'GET',
-            url: `/pages/${id}`,
-        });
+        return this.request('GET', `/pages/${id}`);
     }
     async updatePage(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/pages/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/pages/${id}`, params);
     }
     async deletePage(id) {
-        await this.request({
-            method: 'DELETE',
-            url: `/pages/${id}`,
-        });
+        await this.request('DELETE', `/pages/${id}`);
     }
     async exportPage(id, format) {
-        return this.request({
-            method: 'GET',
-            url: `/pages/${id}/export/${format}`,
-        });
+        return this.requestText('GET', `/pages/${id}/export/${format}`);
     }
     // Chapters API
     async listChapters(params) {
-        return this.request({
-            method: 'GET',
-            url: '/chapters',
-            params,
-        });
+        return this.request('GET', '/chapters', undefined, params);
     }
     async createChapter(params) {
-        return this.request({
-            method: 'POST',
-            url: '/chapters',
-            data: params,
-        });
+        return this.request('POST', '/chapters', params);
     }
     async getChapter(id) {
-        return this.request({
-            method: 'GET',
-            url: `/chapters/${id}`,
-        });
+        return this.request('GET', `/chapters/${id}`);
     }
     async updateChapter(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/chapters/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/chapters/${id}`, params);
     }
     async deleteChapter(id) {
-        await this.request({
-            method: 'DELETE',
-            url: `/chapters/${id}`,
-        });
+        await this.request('DELETE', `/chapters/${id}`);
     }
     async exportChapter(id, format) {
-        return this.request({
-            method: 'GET',
-            url: `/chapters/${id}/export/${format}`,
-        });
+        return this.requestText('GET', `/chapters/${id}/export/${format}`);
     }
     // Shelves API
     async listShelves(params) {
-        return this.request({
-            method: 'GET',
-            url: '/shelves',
-            params,
-        });
+        return this.listWithNameFilter('/shelves', params ?? {});
     }
     async createShelf(params) {
-        return this.request({
-            method: 'POST',
-            url: '/shelves',
-            data: params,
-        });
+        return this.request('POST', '/shelves', params);
     }
     async getShelf(id) {
-        return this.request({
-            method: 'GET',
-            url: `/shelves/${id}`,
-        });
+        return this.request('GET', `/shelves/${id}`);
     }
     async updateShelf(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/shelves/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/shelves/${id}`, params);
     }
     async deleteShelf(id) {
-        await this.request({
-            method: 'DELETE',
-            url: `/shelves/${id}`,
-        });
+        await this.request('DELETE', `/shelves/${id}`);
     }
     // Users API
     async listUsers(params) {
-        return this.request({
-            method: 'GET',
-            url: '/users',
-            params,
-        });
+        return this.request('GET', '/users', undefined, params);
     }
     async createUser(params) {
-        return this.request({
-            method: 'POST',
-            url: '/users',
-            data: params,
-        });
+        return this.request('POST', '/users', params);
     }
     async getUser(id) {
-        return this.request({
-            method: 'GET',
-            url: `/users/${id}`,
-        });
+        return this.request('GET', `/users/${id}`);
     }
     async updateUser(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/users/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/users/${id}`, params);
     }
     async deleteUser(id, migrateOwnershipId) {
         const data = migrateOwnershipId ? { migrate_ownership_id: migrateOwnershipId } : undefined;
-        await this.request({
-            method: 'DELETE',
-            url: `/users/${id}`,
-            data,
-        });
+        await this.request('DELETE', `/users/${id}`, data);
     }
     // Roles API
     async listRoles(params) {
-        return this.request({
-            method: 'GET',
-            url: '/roles',
-            params,
-        });
+        return this.request('GET', '/roles', undefined, params);
     }
     async createRole(params) {
-        return this.request({
-            method: 'POST',
-            url: '/roles',
-            data: params,
-        });
+        return this.request('POST', '/roles', params);
     }
     async getRole(id) {
-        return this.request({
-            method: 'GET',
-            url: `/roles/${id}`,
-        });
+        return this.request('GET', `/roles/${id}`);
     }
     async updateRole(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/roles/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/roles/${id}`, params);
     }
     async deleteRole(id, migrateOwnershipId) {
         const data = migrateOwnershipId ? { migrate_ownership_id: migrateOwnershipId } : undefined;
-        await this.request({
-            method: 'DELETE',
-            url: `/roles/${id}`,
-            data,
-        });
+        await this.request('DELETE', `/roles/${id}`, data);
     }
     // Attachments API
     async listAttachments(params) {
-        return this.request({
-            method: 'GET',
-            url: '/attachments',
-            params,
-        });
+        return this.request('GET', '/attachments', undefined, params);
     }
     async createAttachment(params) {
-        return this.request({
-            method: 'POST',
-            url: '/attachments',
-            data: params,
-        });
+        return this.request('POST', '/attachments', params);
     }
     async getAttachment(id) {
-        return this.request({
-            method: 'GET',
-            url: `/attachments/${id}`,
-        });
+        return this.request('GET', `/attachments/${id}`);
     }
     async updateAttachment(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/attachments/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/attachments/${id}`, params);
     }
     async deleteAttachment(id) {
-        await this.request({
-            method: 'DELETE',
-            url: `/attachments/${id}`,
-        });
+        await this.request('DELETE', `/attachments/${id}`);
     }
     // Images API
     async listImages(params) {
-        return this.request({
-            method: 'GET',
-            url: '/image-gallery',
-            params,
-        });
+        return this.request('GET', '/image-gallery', undefined, params);
     }
     async createImage(params) {
-        return this.request({
-            method: 'POST',
-            url: '/image-gallery',
-            data: params,
-        });
+        return this.request('POST', '/image-gallery', params);
     }
     async getImage(id) {
-        return this.request({
-            method: 'GET',
-            url: `/image-gallery/${id}`,
-        });
+        return this.request('GET', `/image-gallery/${id}`);
     }
     async updateImage(id, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/image-gallery/${id}`,
-            data: params,
-        });
+        return this.request('PUT', `/image-gallery/${id}`, params);
     }
     async deleteImage(id) {
-        await this.request({
-            method: 'DELETE',
-            url: `/image-gallery/${id}`,
-        });
+        await this.request('DELETE', `/image-gallery/${id}`);
     }
     // Search API
     async search(params) {
-        return this.request({
-            method: 'GET',
-            url: '/search',
-            params,
-        });
+        return this.request('GET', '/search', undefined, params);
     }
     // Recycle Bin API
     async listRecycleBin(params) {
-        return this.request({
-            method: 'GET',
-            url: '/recycle-bin',
-            params,
-        });
+        return this.request('GET', '/recycle-bin', undefined, params);
     }
     async restoreFromRecycleBin(deletionId) {
-        await this.request({
-            method: 'PUT',
-            url: `/recycle-bin/${deletionId}`,
-        });
+        await this.request('PUT', `/recycle-bin/${deletionId}`);
     }
     async permanentlyDelete(deletionId) {
-        await this.request({
-            method: 'DELETE',
-            url: `/recycle-bin/${deletionId}`,
-        });
+        await this.request('DELETE', `/recycle-bin/${deletionId}`);
     }
     // Content Permissions API
     async getContentPermissions(contentType, contentId) {
-        return this.request({
-            method: 'GET',
-            url: `/content-permissions/${contentType}/${contentId}`,
-        });
+        return this.request('GET', `/content-permissions/${contentType}/${contentId}`);
     }
     async updateContentPermissions(contentType, contentId, params) {
-        return this.request({
-            method: 'PUT',
-            url: `/content-permissions/${contentType}/${contentId}`,
-            data: params,
-        });
+        return this.request('PUT', `/content-permissions/${contentType}/${contentId}`, params);
     }
     // Audit Log API
     async listAuditLog(params) {
-        return this.request({
-            method: 'GET',
-            url: '/audit-log',
-            params,
+        let mapped = { ...params };
+        let dateFrom;
+        let dateTo;
+        if (mapped.filter && typeof mapped.filter === 'object') {
+            const f = { ...mapped.filter };
+            // Remap entity_type → loggable_type (BookStack API naming)
+            if (f.entity_type !== undefined) {
+                f.loggable_type = f.entity_type;
+                delete f.entity_type;
+            }
+            // BookStack API does not support date filtering — extract and apply client-side
+            if (f.date_from !== undefined) {
+                dateFrom = f.date_from;
+                delete f.date_from;
+            }
+            if (f.date_to !== undefined) {
+                dateTo = f.date_to;
+                delete f.date_to;
+            }
+            mapped = { ...mapped, filter: f };
+        }
+        if (!dateFrom && !dateTo) {
+            return this.request('GET', '/audit-log', undefined, mapped);
+        }
+        // Date filtering: fetch all entries matching the other filters, then filter client-side
+        const { count, offset, ...fetchParams } = mapped;
+        const all = await this.fetchAll('/audit-log', fetchParams);
+        const from = dateFrom ? new Date(dateFrom).getTime() : -Infinity;
+        const to = dateTo ? new Date(dateTo + 'T23:59:59Z').getTime() : Infinity;
+        const filtered = all.filter((entry) => {
+            const t = new Date(entry.created_at).getTime();
+            return t >= from && t <= to;
         });
+        const pageOffset = offset ?? 0;
+        const pageCount = count ?? 20;
+        return {
+            data: filtered.slice(pageOffset, pageOffset + pageCount),
+            total: filtered.length,
+        };
     }
     // System API
     async getSystemInfo() {
-        return this.request({
-            method: 'GET',
-            url: '/system',
-        });
+        return this.request('GET', '/system');
     }
 }
 exports.BookStackClient = BookStackClient;

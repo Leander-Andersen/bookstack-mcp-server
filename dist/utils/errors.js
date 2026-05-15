@@ -22,27 +22,35 @@ class ErrorHandler {
         };
     }
     /**
-     * Handle Axios errors specifically
+     * Handle fetch HTTP errors (non-2xx responses)
      */
-    handleAxiosError(error) {
-        const status = error.response?.status;
+    handleFetchError(status, url, method, body) {
         const mapping = this.errorMappings[status] || {
             type: 'unknown_error',
-            message: 'Unknown error occurred'
+            message: 'Unknown error occurred',
         };
-        const mcpError = new types_js_1.McpError(this.mapToMCPErrorCode(status), mapping.message, {
+        // Try to extract a short BookStack-provided error message without leaking the full body.
+        let upstreamMessage;
+        try {
+            const parsed = JSON.parse(body);
+            const candidate = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+            if (typeof candidate === 'string') {
+                upstreamMessage = candidate.slice(0, 200);
+            }
+        }
+        catch {
+            // body wasn't JSON — discard rather than echoing potentially sensitive text.
+        }
+        const mcpError = new types_js_1.McpError(this.mapToMCPErrorCode(status), upstreamMessage ? `${mapping.message}: ${upstreamMessage}` : mapping.message, {
             type: mapping.type,
             status,
-            details: error.response?.data,
-            url: error.config?.url,
-            method: error.config?.method?.toUpperCase(),
         });
-        this.logger.error('Axios error handled', {
+        this.logger.error('Fetch error handled', {
             status,
             type: mapping.type,
-            url: error.config?.url,
-            method: error.config?.method,
-            message: error.message,
+            url,
+            method,
+            body,
         });
         return mcpError;
     }
@@ -52,9 +60,6 @@ class ErrorHandler {
     handleError(error) {
         if (error instanceof types_js_1.McpError) {
             return error;
-        }
-        if (error.isAxiosError) {
-            return this.handleAxiosError(error);
         }
         // Handle validation errors from Zod
         if (error.name === 'ZodError') {
@@ -67,17 +72,13 @@ class ErrorHandler {
                 validation: validationDetails,
             });
         }
-        // Handle generic errors
-        const mcpError = new types_js_1.McpError(types_js_1.ErrorCode.InternalError, error.message || 'An unexpected error occurred', {
-            type: 'internal_error',
-            stack: error.stack,
-        });
+        // Stack traces stay in server logs, never in the response to the client.
         this.logger.error('Generic error handled', {
             message: error.message,
             stack: error.stack,
             name: error.name,
         });
-        return mcpError;
+        return new types_js_1.McpError(types_js_1.ErrorCode.InternalError, 'An unexpected error occurred', { type: 'internal_error' });
     }
     /**
      * Map HTTP status codes to MCP error codes
@@ -105,26 +106,11 @@ class ErrorHandler {
         }
     }
     /**
-     * Check if error is retryable
-     */
-    isRetryable(error) {
-        if (error.isAxiosError) {
-            const status = error.response?.status;
-            return [429, 500, 502, 503, 504].includes(status);
-        }
-        return false;
-    }
-    /**
      * Create a user-friendly error message
      */
     getUserFriendlyMessage(error) {
         if (error instanceof types_js_1.McpError) {
             return error.message;
-        }
-        if (error.isAxiosError) {
-            const status = error.response?.status;
-            const mapping = this.errorMappings[status];
-            return mapping?.message || 'An error occurred while communicating with BookStack';
         }
         return 'An unexpected error occurred';
     }

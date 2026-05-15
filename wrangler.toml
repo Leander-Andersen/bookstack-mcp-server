@@ -12,3 +12,10 @@ SERVER_VERSION = "1.2.5"
 #   npx wrangler secret put BOOKSTACK_BASE_URL
 #   npx wrangler secret put BOOKSTACK_API_TOKEN
 #   npx wrangler secret put MCP_API_KEY
+
+# KV namespace — used for:
+#   - OAuth single-use auth-code enforcement (key prefix: code-used:)
+#   - Future: BookStack response caching (key prefix: cache:)
+[[kv_namespaces]]
+binding = "BOOKSTACK_KV"
+id = "45f216ea7e734af9ab77a324997457a5"

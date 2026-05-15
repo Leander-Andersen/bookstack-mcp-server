@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ServerInfoTools = void 0;
-const manager_1 = require("../config/manager");
 /**
  * Server Information Tools for MCP Self-Description
  *
@@ -65,7 +64,6 @@ class ServerInfoTools {
             ],
             handler: async (params) => {
                 const section = params.section || 'all';
-                const config = manager_1.ConfigManager.getInstance().getConfig();
                 const serverInfo = {
                     name: 'BookStack MCP Server',
                     version: '1.0.0',
@@ -86,15 +84,6 @@ class ServerInfoTools {
                         authentication: {
                             required: true,
                             methods: ['API Token'],
-                        },
-                        rate_limiting: {
-                            enabled: !!config.rateLimit,
-                            requests_per_minute: config.rateLimit?.requestsPerMinute,
-                            burst_limit: config.rateLimit?.burstLimit,
-                        },
-                        validation: {
-                            enabled: config.validation?.enabled || true,
-                            strict_mode: config.validation?.strictMode || false,
                         },
                     },
                     tool_categories: this.getToolCategories(),

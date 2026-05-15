@@ -579,32 +579,38 @@ declare const ValidationSchemas: {
     roleCreate: z.ZodObject<{
         display_name: z.ZodString;
         description: z.ZodOptional<z.ZodString>;
+        external_auth_id: z.ZodOptional<z.ZodString>;
         permissions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         mfa_enforced: z.ZodOptional<z.ZodBoolean>;
     }, "strip", z.ZodTypeAny, {
         display_name: string;
         description?: string | undefined;
+        external_auth_id?: string | undefined;
         permissions?: string[] | undefined;
         mfa_enforced?: boolean | undefined;
     }, {
         display_name: string;
         description?: string | undefined;
+        external_auth_id?: string | undefined;
         permissions?: string[] | undefined;
         mfa_enforced?: boolean | undefined;
     }>;
     roleUpdate: z.ZodObject<{
         display_name: z.ZodOptional<z.ZodString>;
         description: z.ZodOptional<z.ZodString>;
+        external_auth_id: z.ZodOptional<z.ZodString>;
         permissions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         mfa_enforced: z.ZodOptional<z.ZodBoolean>;
     }, "strip", z.ZodTypeAny, {
         display_name?: string | undefined;
         description?: string | undefined;
+        external_auth_id?: string | undefined;
         permissions?: string[] | undefined;
         mfa_enforced?: boolean | undefined;
     }, {
         display_name?: string | undefined;
         description?: string | undefined;
+        external_auth_id?: string | undefined;
         permissions?: string[] | undefined;
         mfa_enforced?: boolean | undefined;
     }>;
@@ -652,23 +658,23 @@ declare const ValidationSchemas: {
     }, "strip", z.ZodTypeAny, {
         name: string;
         uploaded_to: number;
-        link?: string | undefined;
         file?: string | undefined;
+        link?: string | undefined;
     }, {
         name: string;
         uploaded_to: number;
-        link?: string | undefined;
         file?: string | undefined;
+        link?: string | undefined;
     }>, {
         name: string;
         uploaded_to: number;
-        link?: string | undefined;
         file?: string | undefined;
+        link?: string | undefined;
     }, {
         name: string;
         uploaded_to: number;
-        link?: string | undefined;
         file?: string | undefined;
+        link?: string | undefined;
     }>;
     attachmentUpdate: z.ZodObject<{
         uploaded_to: z.ZodOptional<z.ZodNumber>;
@@ -677,14 +683,14 @@ declare const ValidationSchemas: {
         link: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
         name?: string | undefined;
-        link?: string | undefined;
         uploaded_to?: number | undefined;
         file?: string | undefined;
+        link?: string | undefined;
     }, {
         name?: string | undefined;
-        link?: string | undefined;
         uploaded_to?: number | undefined;
         file?: string | undefined;
+        link?: string | undefined;
     }>;
     imagesList: z.ZodObject<{
         count: z.ZodDefault<z.ZodNumber>;
@@ -741,7 +747,7 @@ declare const ValidationSchemas: {
         image?: string | undefined;
     }>;
     search: z.ZodObject<{
-        query: z.ZodString;
+        query: z.ZodDefault<z.ZodString>;
         page: z.ZodDefault<z.ZodNumber>;
         count: z.ZodDefault<z.ZodNumber>;
     }, "strip", z.ZodTypeAny, {
@@ -749,9 +755,9 @@ declare const ValidationSchemas: {
         count: number;
         query: string;
     }, {
-        query: string;
         page?: number | undefined;
         count?: number | undefined;
+        query?: string | undefined;
     }>;
     auditLogList: z.ZodObject<{
         count: z.ZodDefault<z.ZodNumber>;
@@ -762,16 +768,22 @@ declare const ValidationSchemas: {
             user_id: z.ZodOptional<z.ZodNumber>;
             entity_type: z.ZodOptional<z.ZodString>;
             entity_id: z.ZodOptional<z.ZodNumber>;
+            date_from: z.ZodOptional<z.ZodString>;
+            date_to: z.ZodOptional<z.ZodString>;
         }, "strip", z.ZodTypeAny, {
             type?: string | undefined;
             user_id?: number | undefined;
             entity_type?: string | undefined;
             entity_id?: number | undefined;
+            date_from?: string | undefined;
+            date_to?: string | undefined;
         }, {
             type?: string | undefined;
             user_id?: number | undefined;
             entity_type?: string | undefined;
             entity_id?: number | undefined;
+            date_from?: string | undefined;
+            date_to?: string | undefined;
         }>>;
     }, "strip", z.ZodTypeAny, {
         sort: "type" | "created_at" | "user_id";
@@ -782,6 +794,8 @@ declare const ValidationSchemas: {
             user_id?: number | undefined;
             entity_type?: string | undefined;
             entity_id?: number | undefined;
+            date_from?: string | undefined;
+            date_to?: string | undefined;
         } | undefined;
     }, {
         sort?: "type" | "created_at" | "user_id" | undefined;
@@ -790,46 +804,81 @@ declare const ValidationSchemas: {
             user_id?: number | undefined;
             entity_type?: string | undefined;
             entity_id?: number | undefined;
+            date_from?: string | undefined;
+            date_to?: string | undefined;
         } | undefined;
         count?: number | undefined;
         offset?: number | undefined;
     }>;
     contentPermissionsUpdate: z.ZodObject<{
-        permissions: z.ZodArray<z.ZodObject<{
+        role_permissions: z.ZodOptional<z.ZodArray<z.ZodObject<{
             role_id: z.ZodNumber;
             view: z.ZodBoolean;
             create: z.ZodBoolean;
             update: z.ZodBoolean;
             delete: z.ZodBoolean;
         }, "strip", z.ZodTypeAny, {
-            delete: boolean;
             role_id: number;
             view: boolean;
             create: boolean;
             update: boolean;
+            delete: boolean;
         }, {
-            delete: boolean;
             role_id: number;
             view: boolean;
             create: boolean;
             update: boolean;
-        }>, "many">;
+            delete: boolean;
+        }>, "many">>;
+        fallback_permissions: z.ZodOptional<z.ZodObject<{
+            inheriting: z.ZodBoolean;
+            view: z.ZodOptional<z.ZodBoolean>;
+            create: z.ZodOptional<z.ZodBoolean>;
+            update: z.ZodOptional<z.ZodBoolean>;
+            delete: z.ZodOptional<z.ZodBoolean>;
+        }, "strip", z.ZodTypeAny, {
+            inheriting: boolean;
+            view?: boolean | undefined;
+            create?: boolean | undefined;
+            update?: boolean | undefined;
+            delete?: boolean | undefined;
+        }, {
+            inheriting: boolean;
+            view?: boolean | undefined;
+            create?: boolean | undefined;
+            update?: boolean | undefined;
+            delete?: boolean | undefined;
+        }>>;
     }, "strip", z.ZodTypeAny, {
-        permissions: {
-            delete: boolean;
+        role_permissions?: {
             role_id: number;
             view: boolean;
             create: boolean;
             update: boolean;
-        }[];
+            delete: boolean;
+        }[] | undefined;
+        fallback_permissions?: {
+            inheriting: boolean;
+            view?: boolean | undefined;
+            create?: boolean | undefined;
+            update?: boolean | undefined;
+            delete?: boolean | undefined;
+        } | undefined;
     }, {
-        permissions: {
-            delete: boolean;
+        role_permissions?: {
             role_id: number;
             view: boolean;
             create: boolean;
             update: boolean;
-        }[];
+            delete: boolean;
+        }[] | undefined;
+        fallback_permissions?: {
+            inheriting: boolean;
+            view?: boolean | undefined;
+            create?: boolean | undefined;
+            update?: boolean | undefined;
+            delete?: boolean | undefined;
+        } | undefined;
     }>;
     export: z.ZodObject<{
         id: z.ZodNumber;

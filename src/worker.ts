@@ -1,7 +1,6 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { BookStackMCPServer } from './server';
-import { ConfigManager } from './config/manager';
-import { WorkerEnv, buildConfigFromEnv, seedProcessEnv } from './config/worker-config';
+import { WorkerEnv, buildConfigFromEnv } from './config/worker-config';
 import {
   oauthMetadata,
   authorizePage,
@@ -9,6 +8,7 @@ import {
   validateAuthCode,
   generateAccessToken,
   validateAccessToken,
+  isAllowedRedirectUri,
 } from './utils/oauth';
 
 export type { WorkerEnv as Env };
@@ -158,6 +158,16 @@ export default {
         const state         = url.searchParams.get('state') ?? '';
         const codeChallenge = url.searchParams.get('code_challenge') ?? '';
         const clientId      = url.searchParams.get('client_id') ?? '';
+
+        // Reject untrusted redirect targets BEFORE showing the password form.
+        // This kills the open-redirect / code-theft chain at the front door.
+        if (!isAllowedRedirectUri(redirectUri)) {
+          return json({
+            error: 'invalid_request',
+            error_description: 'redirect_uri is not on the allow-list (claude.ai / claude.com only)',
+          }, 400);
+        }
+
         return html(authorizePage({ redirectUri, state, codeChallenge, clientId }));
       }
 
@@ -168,6 +178,12 @@ export default {
         const state         = body.get('state') as string ?? '';
         const codeChallenge = body.get('code_challenge') as string ?? '';
         const clientId      = body.get('client_id') as string ?? '';
+
+        // Re-check on POST — a malicious page could craft a form that bypasses
+        // the GET check by submitting directly with its own redirect_uri.
+        if (!isAllowedRedirectUri(redirectUri)) {
+          return json({ error: 'invalid_request', error_description: 'redirect_uri not allowed' }, 400);
+        }
 
         // Validate the password against MCP_API_KEY (trim both to avoid whitespace/newline issues)
         const encoder = new TextEncoder();
@@ -181,8 +197,8 @@ export default {
           return html(authorizePage({ redirectUri, state, codeChallenge, clientId, error: true }));
         }
 
-        // Correct password — generate auth code and redirect back to Claude
-        const code = await generateAuthCode(apiKey, codeChallenge);
+        // Correct password — generate auth code (bound to redirect_uri + client_id) and redirect.
+        const code = await generateAuthCode(apiKey, codeChallenge, redirectUri, clientId);
         const redirect = new URL(redirectUri);
         redirect.searchParams.set('code', code);
         redirect.searchParams.set('state', state);
@@ -209,14 +225,29 @@ export default {
       const grantType    = params.get('grant_type');
       const code         = params.get('code') ?? '';
       const codeVerifier = params.get('code_verifier') ?? '';
+      const redirectUri  = params.get('redirect_uri') ?? '';
+      const clientId     = params.get('client_id') ?? '';
 
       if (grantType !== 'authorization_code') {
         return json({ error: 'unsupported_grant_type' }, 400);
       }
 
-      const valid = await validateAuthCode(apiKey, code, codeVerifier);
-      if (!valid) {
+      // Validate HMAC + PKCE + (implicitly) redirect_uri/client_id binding.
+      // Returns the nonce so we can mark it consumed.
+      const nonce = await validateAuthCode(apiKey, code, codeVerifier, redirectUri, clientId);
+      if (!nonce) {
         return json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
+      }
+
+      // Single-use enforcement via KV. The auth-code TTL is 5 minutes, so KV
+      // keys auto-expire after 5 minutes too — no cleanup needed.
+      if (env.BOOKSTACK_KV) {
+        const consumedKey = `code-used:${nonce}`;
+        const already = await env.BOOKSTACK_KV.get(consumedKey);
+        if (already) {
+          return json({ error: 'invalid_grant', error_description: 'Authorization code already used' }, 400);
+        }
+        await env.BOOKSTACK_KV.put(consumedKey, '1', { expirationTtl: 300 });
       }
 
       const accessToken = await generateAccessToken(apiKey);
@@ -258,10 +289,6 @@ export default {
       return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, POST, DELETE', ...VERSION_HEADER } });
     }
 
-    // Seed process.env + reset ConfigManager so server-info.ts tools work
-    seedProcessEnv(env);
-    ConfigManager.reset();
-
     let body: unknown;
     if (request.method === 'POST') {
       try {
@@ -274,12 +301,16 @@ export default {
     const config = buildConfigFromEnv(env);
 
     try {
-      const mcpServer = new BookStackMCPServer({ bookstack: config.bookstack });
+      const mcpServer = new BookStackMCPServer(config);
+      // Stateless: a fresh transport per request, session ID is never reused.
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
+        sessionIdGenerator: () => crypto.randomUUID(),
         enableJsonResponse: true,
       });
-      await mcpServer.connect(transport);
+      // SDK type mismatch: StreamableHTTPServerTransport.onclose is optional,
+      // but Transport.onclose is required under exactOptionalPropertyTypes.
+      transport.onclose = () => {};
+      await mcpServer.connect(transport as unknown as Parameters<typeof mcpServer.connect>[0]);
       return await handleMCPRequest(transport, request, body);
     } catch (error) {
       console.error('Worker MCP request failed:', error);

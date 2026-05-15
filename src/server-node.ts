@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { BookStackMCPServer } from './server';
 import { ConfigManager, Config } from './config/manager';
 
-const transport = process.env.MCP_TRANSPORT || 'http';
+const transport = process.env.MCP_TRANSPORT || 'stdio';
 
 if (transport === 'stdio') {
   const server = new BookStackMCPServer();
@@ -41,10 +41,12 @@ if (transport === 'stdio') {
 
       const server = new BookStackMCPServer(configOverrides);
       const mcpTransport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
+        sessionIdGenerator: () => require('crypto').randomUUID(),
         enableJsonResponse: true,
       });
-      await server.connect(mcpTransport);
+      // SDK type mismatch: see worker.ts.
+      mcpTransport.onclose = () => {};
+      await server.connect(mcpTransport as unknown as Parameters<typeof server.connect>[0]);
       await mcpTransport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error('Error handling request:', error);

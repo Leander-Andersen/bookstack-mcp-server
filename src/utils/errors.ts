@@ -29,22 +29,24 @@ export class ErrorHandler {
       message: 'Unknown error occurred',
     };
 
-    let details: unknown;
+    // Try to extract a short BookStack-provided error message without leaking the full body.
+    let upstreamMessage: string | undefined;
     try {
-      details = JSON.parse(body);
+      const parsed = JSON.parse(body);
+      const candidate = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+      if (typeof candidate === 'string') {
+        upstreamMessage = candidate.slice(0, 200);
+      }
     } catch {
-      details = body;
+      // body wasn't JSON — discard rather than echoing potentially sensitive text.
     }
 
     const mcpError = new McpError(
       this.mapToMCPErrorCode(status),
-      mapping.message,
+      upstreamMessage ? `${mapping.message}: ${upstreamMessage}` : mapping.message,
       {
         type: mapping.type,
         status,
-        details,
-        url,
-        method,
       }
     );
 
@@ -53,6 +55,7 @@ export class ErrorHandler {
       type: mapping.type,
       url,
       method,
+      body,
     });
 
     return mcpError;
@@ -83,23 +86,18 @@ export class ErrorHandler {
       );
     }
 
-    // Handle generic errors
-    const mcpError = new McpError(
-      ErrorCode.InternalError,
-      error.message || 'An unexpected error occurred',
-      {
-        type: 'internal_error',
-        stack: error.stack,
-      }
-    );
-
+    // Stack traces stay in server logs, never in the response to the client.
     this.logger.error('Generic error handled', {
       message: error.message,
       stack: error.stack,
       name: error.name,
     });
 
-    return mcpError;
+    return new McpError(
+      ErrorCode.InternalError,
+      'An unexpected error occurred',
+      { type: 'internal_error' }
+    );
   }
 
   /**

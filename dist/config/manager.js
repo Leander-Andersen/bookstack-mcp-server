@@ -2,10 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ConfigManager = exports.ConfigSchema = void 0;
 const zod_1 = require("zod");
-const dotenv_1 = require("dotenv");
 const logger_1 = require("../utils/logger");
-// Load environment variables
-(0, dotenv_1.config)();
+// Load .env only when running on Node (not on Cloudflare Workers).
+// `process.versions.node` is undefined in the Workers runtime.
+if (typeof process !== 'undefined' && process.versions?.node) {
+    // Dynamic require keeps the dotenv import out of the Worker bundle.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('dotenv').config();
+}
 /**
  * Configuration schema using Zod for validation
  */
@@ -38,8 +42,8 @@ exports.ConfigSchema = zod_1.z.object({
         cacheTtl: zod_1.z.number().positive().default(3600),
     }),
     security: zod_1.z.object({
-        corsEnabled: zod_1.z.boolean().default(true),
-        corsOrigin: zod_1.z.string().default('*'),
+        corsEnabled: zod_1.z.boolean().default(false),
+        corsOrigin: zod_1.z.string().default(''),
         helmetEnabled: zod_1.z.boolean().default(true),
     }),
     development: zod_1.z.object({
@@ -60,6 +64,13 @@ class ConfigManager {
             ConfigManager.instance = new ConfigManager();
         }
         return ConfigManager.instance;
+    }
+    /**
+     * Reset the singleton — used by the Cloudflare Worker to re-initialize
+     * config on each request after seeding process.env from Worker secrets.
+     */
+    static reset() {
+        ConfigManager.instance = undefined;
     }
     /**
      * Load and validate configuration from environment variables
@@ -94,8 +105,8 @@ class ConfigManager {
                 cacheTtl: parseInt(process.env.CONTEXT7_CACHE_TTL || '3600'),
             },
             security: {
-                corsEnabled: process.env.CORS_ENABLED !== 'false',
-                corsOrigin: process.env.CORS_ORIGIN || '*',
+                corsEnabled: process.env.CORS_ENABLED === 'true',
+                corsOrigin: process.env.CORS_ORIGIN || '',
                 helmetEnabled: process.env.HELMET_ENABLED !== 'false',
             },
             development: {

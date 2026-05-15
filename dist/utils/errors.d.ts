@@ -1,4 +1,3 @@
-import { AxiosError } from 'axios';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { Logger } from './logger';
 /**
@@ -9,9 +8,9 @@ export declare class ErrorHandler {
     private errorMappings;
     constructor(logger: Logger);
     /**
-     * Handle Axios errors specifically
+     * Handle fetch HTTP errors (non-2xx responses)
      */
-    handleAxiosError(error: AxiosError): McpError;
+    handleFetchError(status: number, url: string, method: string, body: string): McpError;
     /**
      * Handle generic errors
      */
@@ -20,10 +19,6 @@ export declare class ErrorHandler {
      * Map HTTP status codes to MCP error codes
      */
     private mapToMCPErrorCode;
-    /**
-     * Check if error is retryable
-     */
-    isRetryable(error: any): boolean;
     /**
      * Create a user-friendly error message
      */
