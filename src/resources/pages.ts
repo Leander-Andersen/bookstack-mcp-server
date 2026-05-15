@@ -15,7 +15,7 @@ export class PageResources {
         name: 'Pages',
         description: 'All pages in the BookStack instance',
         mimeType: 'application/json',
-        handler: async (uri: string) => await this.client.listPages(),
+        handler: async (_uri: string) => await this.client.listPages(),
       },
       {
         uri: 'bookstack://pages/{id}',

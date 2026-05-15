@@ -5,7 +5,6 @@ import { Logger } from '../utils/logger';
 // `process.versions.node` is undefined in the Workers runtime.
 if (typeof process !== 'undefined' && process.versions?.node) {
   // Dynamic require keeps the dotenv import out of the Worker bundle.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   require('dotenv').config();
 }
 
