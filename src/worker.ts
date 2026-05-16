@@ -197,8 +197,10 @@ export default {
           return html(authorizePage({ redirectUri, state, codeChallenge, clientId, error: true }));
         }
 
-        // Correct password — generate auth code (bound to redirect_uri + client_id) and redirect.
-        const code = await generateAuthCode(apiKey, codeChallenge, redirectUri, clientId);
+        // Correct password — generate auth code bound to redirect_uri and redirect.
+        // (We intentionally don't bind client_id — see generateAuthCode docstring.)
+        console.log('OAuth authorize OK', { clientId, redirectUri });
+        const code = await generateAuthCode(apiKey, codeChallenge, redirectUri);
         const redirect = new URL(redirectUri);
         redirect.searchParams.set('code', code);
         redirect.searchParams.set('state', state);
@@ -228,14 +230,23 @@ export default {
       const redirectUri  = params.get('redirect_uri') ?? '';
       const clientId     = params.get('client_id') ?? '';
 
+      console.log('OAuth token request', {
+        grantType,
+        hasCode: !!code,
+        hasVerifier: !!codeVerifier,
+        redirectUri,
+        clientId,
+      });
+
       if (grantType !== 'authorization_code') {
         return json({ error: 'unsupported_grant_type' }, 400);
       }
 
-      // Validate HMAC + PKCE + (implicitly) redirect_uri/client_id binding.
+      // Validate HMAC + PKCE + (implicitly) redirect_uri binding.
       // Returns the nonce so we can mark it consumed.
-      const nonce = await validateAuthCode(apiKey, code, codeVerifier, redirectUri, clientId);
+      const nonce = await validateAuthCode(apiKey, code, codeVerifier, redirectUri);
       if (!nonce) {
+        console.warn('OAuth token: validateAuthCode failed', { redirectUri, clientId });
         return json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
       }
 

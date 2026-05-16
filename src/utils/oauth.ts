@@ -82,23 +82,26 @@ function randomNonce(): string {
 // ---------------------------------------------------------------------------
 // Authorization codes  (valid AUTH_CODE_TTL_MS, encode PKCE challenge)
 // Format: {ts}.{nonce}.{b64url(codeChallenge)}.{hmac}
-// The HMAC also binds redirect_uri and client_id (NOT encoded in the code)
-// so the caller MUST re-supply them at token-exchange time. Any mismatch
-// fails verification — this prevents stolen codes being redeemed elsewhere.
+//
+// The HMAC binds redirect_uri (HIGH-3) so a stolen code can't be redeemed
+// pointing at a different host. We deliberately do NOT bind client_id —
+// Claude.ai's MCP client uses dynamic client registration and the client_id
+// can differ between the authorize and token requests, which would cause
+// HMAC verification failures for legitimate flows. The redirect_uri allow-
+// list (see isAllowedRedirectUri) + the HMAC binding on redirect_uri are
+// sufficient to neutralize the open-redirect / code-theft chain.
 // ---------------------------------------------------------------------------
 
 export async function generateAuthCode(
   secret: string,
   codeChallenge: string,
   redirectUri: string,
-  clientId: string,
 ): Promise<string> {
   const ts = Date.now().toString();
   const nonce = randomNonce();
   const cc = b64url(new TextEncoder().encode(codeChallenge));
   const visible = `${ts}.${nonce}.${cc}`;
-  // The HMAC covers the visible payload plus the bound parameters.
-  const sig = await hmacSign(secret, `code:${visible}|${redirectUri}|${clientId}`);
+  const sig = await hmacSign(secret, `code:${visible}|${redirectUri}`);
   return `${visible}.${sig}`;
 }
 
@@ -108,7 +111,6 @@ export async function validateAuthCode(
   code: string,
   codeVerifier: string,
   redirectUri: string,
-  clientId: string,
 ): Promise<string | null> {
   try {
     const parts = code.split('.');
@@ -118,7 +120,7 @@ export async function validateAuthCode(
     if (Date.now() - parseInt(ts, 10) > AUTH_CODE_TTL_MS) return null;
 
     const visible = `${ts}.${nonce}.${cc}`;
-    if (!await hmacVerify(secret, `code:${visible}|${redirectUri}|${clientId}`, sig)) return null;
+    if (!await hmacVerify(secret, `code:${visible}|${redirectUri}`, sig)) return null;
 
     // PKCE: SHA-256(code_verifier) must equal code_challenge
     const verifierHash = await crypto.subtle.digest(
