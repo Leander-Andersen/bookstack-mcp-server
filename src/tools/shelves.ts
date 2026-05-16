@@ -288,7 +288,7 @@ export class ShelfTools {
             items: {
               type: 'integer',
             },
-            description: 'New list of book IDs (replaces ALL existing books on this shelf).',
+            description: 'If provided, replaces ALL books on this shelf with this list. If omitted, the current book list is preserved unchanged.',
           },
         },
       },

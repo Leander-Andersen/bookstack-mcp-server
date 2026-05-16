@@ -164,18 +164,25 @@ export class ServerInfoTools {
         properties: {
           workflow: {
             type: 'string',
-            enum: ['create_documentation', 'organize_content', 'user_management', 'search_content', 'export_data'],
-            description: 'Specific workflow name.',
+            enum: ['create_documentation', 'update_existing_content'],
+            description: 'Specific workflow name. Omit to receive all workflows.',
           },
         },
       },
       handler: async (params: any) => {
         const examples = this.getUsageExamples();
-        
+
         if (params.workflow) {
-          return examples.find(e => e.title.toLowerCase().includes(params.workflow)) || { error: 'Workflow not found' };
+          // Map enum keys to keyword fragments that appear in the example titles.
+          const keywordByWorkflow: Record<string, string> = {
+            create_documentation:    'create complete documentation',
+            update_existing_content: 'search and update existing',
+          };
+          const needle = keywordByWorkflow[params.workflow] ?? params.workflow.replace(/_/g, ' ');
+          const match = examples.find(e => e.title.toLowerCase().includes(needle));
+          return match ?? { error: 'Workflow not found' };
         }
-        
+
         return { examples };
       },
     };
@@ -229,22 +236,27 @@ export class ServerInfoTools {
           },
           context: {
             type: 'string',
-            description: 'Describe what you are trying to do.',
+            description: 'Optional. Describe what you are trying to do to receive contextual advice in addition to the topic guidance. Omit if you only need the topic guidance.',
           },
         },
       },
       handler: async (params: any) => {
         const helpContent = this.getHelpContent();
-        
+
         if (params.topic) {
           const topicHelp = helpContent[params.topic as keyof typeof helpContent];
-          return {
+          const result: Record<string, unknown> = {
             topic: params.topic,
             guidance: topicHelp,
-            context_advice: params.context ? this.getContextualAdvice(params.context) : null,
           };
+          // Only include context_advice when the caller supplied context — a null
+          // value here was misleading (looked like the field had failed to populate).
+          if (params.context) {
+            result.context_advice = this.getContextualAdvice(params.context);
+          }
+          return result;
         }
-        
+
         return {
           available_topics: Object.keys(helpContent),
           general_guidance: 'Use bookstack_server_info for complete capabilities, then select specific tools based on your task.',

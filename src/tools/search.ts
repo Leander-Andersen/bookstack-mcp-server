@@ -146,7 +146,52 @@ export class SearchTools {
         // Treat "*" as empty — BookStack doesn't support wildcards and returns 0 results.
         const textQuery = (params.query ?? '').trim().replace(/^\*+$/, '');
 
-        // Build final query by merging structured filters into the query string
+        const pageNum  = params.page  ?? 1;
+        const pageSize = params.count ?? 20;
+
+        const matchesTagFilter = (item: any): boolean => {
+          if (!f.tag) return true;
+          const tagName  = f.tag.name?.toLowerCase();
+          const tagValue = f.tag.value?.toLowerCase();
+          return (item.tags ?? []).some((t: any) =>
+            (!tagName  || t.name?.toLowerCase()  === tagName) &&
+            (!tagValue || t.value?.toLowerCase() === tagValue)
+          );
+        };
+
+        // ── Tag-only fallback ────────────────────────────────────────────────
+        // BookStack's /search endpoint doesn't honor "{tag:Name}" when the query
+        // string contains nothing else — it returns 0 results. When the caller
+        // gave us no text query and only a tag filter (optionally narrowed by
+        // type), fetch from the per-type list endpoints and filter client-side.
+        if (!textQuery && f.tag && !f.owned_by && !f.created_by && !f.updated_by) {
+          this.logger.info('Tag-only search via list+filter fallback', { tag: f.tag, type: f.type });
+          const types: Array<'page' | 'book' | 'chapter' | 'bookshelf'> =
+            f.type === 'shelf' ? ['bookshelf']
+            : f.type ? [f.type as 'page' | 'book' | 'chapter']
+            : ['page', 'book', 'chapter', 'bookshelf'];
+
+          const all: any[] = [];
+          for (const type of types) {
+            const items = await this.fetchAllForType(type);
+            for (const item of items) {
+              if (matchesTagFilter(item)) {
+                all.push({ ...item, type: type === 'bookshelf' ? 'bookshelf' : type });
+              }
+            }
+          }
+
+          const start = (pageNum - 1) * pageSize;
+          const slice = all.slice(start, start + pageSize);
+          let results: any = { data: slice, total: all.length };
+
+          if (params.include_content) {
+            results = await this.enrichWithContent(results);
+          }
+          return results;
+        }
+
+        // ── Default: structured filters → BookStack syntax → /search ─────────
         let finalQuery = textQuery;
 
         if (f.type) {
@@ -169,25 +214,16 @@ export class SearchTools {
           throw new Error('Provide a query string or at least one filter (e.g. filters.type, filters.tag).');
         }
 
-        this.logger.info('Searching content', { query: finalQuery, page: params.page, count: params.count });
+        this.logger.info('Searching content', { query: finalQuery, page: pageNum, count: pageSize });
 
-        const searchParams: any = { query: finalQuery };
-        if (params.page)  searchParams.page  = params.page;
-        if (params.count) searchParams.count = params.count;
+        const searchParams: any = { query: finalQuery, page: pageNum, count: pageSize };
 
         let results = await this.client.search(searchParams);
 
         // Post-filter by tag when a tag filter is active — BookStack search treats
         // tag filters as OR with text matches, so non-tagged results can leak through.
         if (f.tag) {
-          const tagName  = f.tag.name?.toLowerCase();
-          const tagValue = f.tag.value?.toLowerCase();
-          const filtered = results.data.filter((item: any) =>
-            (item.tags ?? []).some((t: any) =>
-              (!tagName  || t.name?.toLowerCase()  === tagName) &&
-              (!tagValue || t.value?.toLowerCase() === tagValue)
-            )
-          );
+          const filtered = results.data.filter(matchesTagFilter);
           results = { data: filtered, total: filtered.length };
         }
 
@@ -195,26 +231,45 @@ export class SearchTools {
           return results;
         }
 
-        // Inline full page content for page-type results
-        const enriched = await Promise.all(
-          results.data.map(async (item: any) => {
-            if (item.type !== 'page') return item;
-            try {
-              const full = await this.client.getPage(item.id);
-              // markdown is empty for WYSIWYG-authored pages — strip HTML as fallback
-              const markdown = full.markdown || htmlToPlainText(full.html || '');
-              return { ...item, content: { markdown, html: full.html } };
-            } catch {
-              return item; // Fall back to snippet if fetch fails
-            }
-          })
-        );
-
-        return { ...results, data: enriched };
+        return this.enrichWithContent(results);
       },
     };
   }
 
+  /**
+   * Inline full page content for page-type results so the caller can avoid
+   * a follow-up pages_read. Non-page items pass through unchanged.
+   */
+  private async enrichWithContent(results: any): Promise<any> {
+    const enriched = await Promise.all(
+      results.data.map(async (item: any) => {
+        if (item.type !== 'page') return item;
+        try {
+          const full = await this.client.getPage(item.id);
+          // markdown is empty for WYSIWYG-authored pages — strip HTML as fallback
+          const markdown = full.markdown || htmlToPlainText(full.html || '');
+          return { ...item, content: { markdown, html: full.html } };
+        } catch {
+          return item; // Fall back to snippet if fetch fails
+        }
+      })
+    );
+    return { ...results, data: enriched };
+  }
+
+  /**
+   * Fetch every item of a given entity type. Used by the tag-only search
+   * fallback when BookStack's /search endpoint returns nothing for queries
+   * that consist solely of "{tag:...}".
+   */
+  private async fetchAllForType(type: 'page' | 'book' | 'chapter' | 'bookshelf'): Promise<any[]> {
+    switch (type) {
+      case 'page':      { const r = await this.client.listPages({ count: 500, offset: 0 } as any); return r.data; }
+      case 'book':      { const r = await this.client.listBooks({ count: 500, offset: 0 } as any); return r.data; }
+      case 'chapter':   { const r = await this.client.listChapters({ count: 500, offset: 0 } as any); return r.data; }
+      case 'bookshelf': { const r = await this.client.listShelves({ count: 500, offset: 0 } as any); return r.data; }
+    }
+  }
 }
 
 export default SearchTools;
