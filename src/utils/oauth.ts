@@ -105,22 +105,29 @@ export async function generateAuthCode(
   return `${visible}.${sig}`;
 }
 
-/** Returns the nonce on success (caller uses it as the KV consumption key), or null. */
+export type AuthCodeResult =
+  | { ok: true; nonce: string }
+  | { ok: false; reason: 'malformed' | 'expired' | 'hmac_mismatch' | 'pkce_mismatch' | 'exception'; detail?: string };
+
+/** Returns success+nonce or failure+reason. Caller logs the reason for debugging. */
 export async function validateAuthCode(
   secret: string,
   code: string,
   codeVerifier: string,
   redirectUri: string,
-): Promise<string | null> {
+): Promise<AuthCodeResult> {
   try {
     const parts = code.split('.');
-    if (parts.length !== 4) return null;
+    if (parts.length !== 4) return { ok: false, reason: 'malformed', detail: `expected 4 parts, got ${parts.length}` };
     const [ts, nonce, cc, sig] = parts;
 
-    if (Date.now() - parseInt(ts, 10) > AUTH_CODE_TTL_MS) return null;
+    const age = Date.now() - parseInt(ts, 10);
+    if (age > AUTH_CODE_TTL_MS) return { ok: false, reason: 'expired', detail: `${Math.round(age / 1000)}s old` };
 
     const visible = `${ts}.${nonce}.${cc}`;
-    if (!await hmacVerify(secret, `code:${visible}|${redirectUri}`, sig)) return null;
+    if (!await hmacVerify(secret, `code:${visible}|${redirectUri}`, sig)) {
+      return { ok: false, reason: 'hmac_mismatch', detail: `redirect_uri at token = ${redirectUri || '(empty)'}` };
+    }
 
     // PKCE: SHA-256(code_verifier) must equal code_challenge
     const verifierHash = await crypto.subtle.digest(
@@ -129,10 +136,16 @@ export async function validateAuthCode(
     );
     const computed = b64url(new Uint8Array(verifierHash));
     const expected = new TextDecoder().decode(b64urlDecode(cc));
-    if (!constantTimeEqual(computed, expected)) return null;
-    return nonce;
-  } catch {
-    return null;
+    if (!constantTimeEqual(computed, expected)) {
+      return {
+        ok: false,
+        reason: 'pkce_mismatch',
+        detail: `verifier hashed to ${computed.slice(0, 12)}... expected ${expected.slice(0, 12)}...`,
+      };
+    }
+    return { ok: true, nonce };
+  } catch (e) {
+    return { ok: false, reason: 'exception', detail: String(e) };
   }
 }
 

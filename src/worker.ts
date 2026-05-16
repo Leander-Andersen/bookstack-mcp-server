@@ -115,6 +115,61 @@ async function handleMCPRequest(
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostic / debug log
+// Writes timestamped events to KV under `debug:oauth:{ts}-{nonce}` with 1h TTL.
+// Inspectable via GET /debug/oauth-log?key=MCP_API_KEY.
+// ---------------------------------------------------------------------------
+
+const DEBUG_KEY_PREFIX = 'debug:oauth:';
+const DEBUG_TTL_SECONDS = 3600; // 1 hour
+
+async function recordOAuthEvent(
+  env: WorkerEnv,
+  type: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const kv = env.BOOKSTACK_DIAGNOSTIC_KV;
+  if (!kv) return;
+  const ts = new Date().toISOString();
+  // Reverse-sortable key — newest first when listed.
+  const sortKey = (9999999999999 - Date.now()).toString().padStart(13, '0');
+  const random = Math.random().toString(36).slice(2, 8);
+  const key = `${DEBUG_KEY_PREFIX}${sortKey}-${random}`;
+  try {
+    await kv.put(
+      key,
+      JSON.stringify({ ts, type, ...data }),
+      { expirationTtl: DEBUG_TTL_SECONDS },
+    );
+  } catch (e) {
+    console.error('debug log write failed', e);
+  }
+}
+
+async function readOAuthEvents(env: WorkerEnv, limit = 50): Promise<unknown[]> {
+  const kv = env.BOOKSTACK_DIAGNOSTIC_KV;
+  if (!kv) return [];
+  const list = await kv.list({ prefix: DEBUG_KEY_PREFIX, limit });
+  const events = await Promise.all(
+    list.keys.map(async k => {
+      const raw = await kv.get(k.name);
+      return raw ? JSON.parse(raw) : null;
+    }),
+  );
+  return events.filter(Boolean);
+}
+
+function constantTimeEq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) diff |= aBytes[i] ^ bBytes[i];
+  return diff === 0;
+}
+
+// ---------------------------------------------------------------------------
 // Main Worker
 // ---------------------------------------------------------------------------
 
@@ -128,6 +183,18 @@ export default {
     // Health check
     if (url.pathname === '/health' && request.method === 'GET') {
       return json({ status: 'ok' });
+    }
+
+    // Diagnostic endpoint — returns recent OAuth events from KV.
+    // Gated by ?key=<MCP_API_KEY> using constant-time compare.
+    if (url.pathname === '/debug/oauth-log' && request.method === 'GET') {
+      const apiKey = env.MCP_API_KEY;
+      const supplied = url.searchParams.get('key') ?? '';
+      if (!apiKey || !constantTimeEq(supplied, apiKey.trim())) {
+        return new Response('Unauthorized', { status: 401, headers: VERSION_HEADER });
+      }
+      const events = await readOAuthEvents(env, 100);
+      return json({ count: events.length, events });
     }
 
     // OAuth server metadata (RFC 8414) — Claude.ai fetches this to discover endpoints
@@ -159,9 +226,16 @@ export default {
         const codeChallenge = url.searchParams.get('code_challenge') ?? '';
         const clientId      = url.searchParams.get('client_id') ?? '';
 
+        await recordOAuthEvent(env, 'authorize_get', {
+          redirectUri, clientId,
+          hasState: !!state,
+          hasCodeChallenge: !!codeChallenge,
+          codeChallengeLen: codeChallenge.length,
+        });
+
         // Reject untrusted redirect targets BEFORE showing the password form.
-        // This kills the open-redirect / code-theft chain at the front door.
         if (!isAllowedRedirectUri(redirectUri)) {
+          await recordOAuthEvent(env, 'authorize_get_rejected', { reason: 'redirect_uri_not_allowed', redirectUri });
           return json({
             error: 'invalid_request',
             error_description: 'redirect_uri is not on the allow-list (claude.ai / claude.com only)',
@@ -194,13 +268,18 @@ export default {
         for (let i = 0; i < len; i++) diff |= aBytes[i] ^ bBytes[i];
 
         if (diff !== 0) {
+          await recordOAuthEvent(env, 'authorize_post_bad_password', { clientId, redirectUri });
           return html(authorizePage({ redirectUri, state, codeChallenge, clientId, error: true }));
         }
 
         // Correct password — generate auth code bound to redirect_uri and redirect.
         // (We intentionally don't bind client_id — see generateAuthCode docstring.)
-        console.log('OAuth authorize OK', { clientId, redirectUri });
         const code = await generateAuthCode(apiKey, codeChallenge, redirectUri);
+        const codeNonce = code.split('.')[1];
+        await recordOAuthEvent(env, 'authorize_post_ok', {
+          clientId, redirectUri, codeNonce,
+          hasCodeChallenge: !!codeChallenge,
+        });
         const redirect = new URL(redirectUri);
         redirect.searchParams.set('code', code);
         redirect.searchParams.set('state', state);
@@ -229,37 +308,50 @@ export default {
       const codeVerifier = params.get('code_verifier') ?? '';
       const redirectUri  = params.get('redirect_uri') ?? '';
       const clientId     = params.get('client_id') ?? '';
+      const codeNonce    = code.split('.')[1] ?? '(none)';
 
-      console.log('OAuth token request', {
+      await recordOAuthEvent(env, 'token_request', {
         grantType,
         hasCode: !!code,
+        codeNonce,
         hasVerifier: !!codeVerifier,
+        codeVerifierLen: codeVerifier.length,
         redirectUri,
         clientId,
+        contentType: ct,
+        allParamKeys: Array.from(params.keys()),
       });
 
       if (grantType !== 'authorization_code') {
+        await recordOAuthEvent(env, 'token_rejected', { reason: 'unsupported_grant_type', grantType });
         return json({ error: 'unsupported_grant_type' }, 400);
       }
 
       // Validate HMAC + PKCE + (implicitly) redirect_uri binding.
-      // Returns the nonce so we can mark it consumed.
-      const nonce = await validateAuthCode(apiKey, code, codeVerifier, redirectUri);
-      if (!nonce) {
-        console.warn('OAuth token: validateAuthCode failed', { redirectUri, clientId });
-        return json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
+      const result = await validateAuthCode(apiKey, code, codeVerifier, redirectUri);
+      if (!result.ok) {
+        await recordOAuthEvent(env, 'token_rejected', {
+          reason: result.reason,
+          detail: result.detail,
+          redirectUri,
+          codeNonce,
+        });
+        return json({ error: 'invalid_grant', error_description: `Invalid or expired authorization code (${result.reason})` }, 400);
       }
 
       // Single-use enforcement via KV. The auth-code TTL is 5 minutes, so KV
       // keys auto-expire after 5 minutes too — no cleanup needed.
       if (env.BOOKSTACK_KV) {
-        const consumedKey = `code-used:${nonce}`;
+        const consumedKey = `code-used:${result.nonce}`;
         const already = await env.BOOKSTACK_KV.get(consumedKey);
         if (already) {
+          await recordOAuthEvent(env, 'token_rejected', { reason: 'code_already_used', codeNonce: result.nonce });
           return json({ error: 'invalid_grant', error_description: 'Authorization code already used' }, 400);
         }
         await env.BOOKSTACK_KV.put(consumedKey, '1', { expirationTtl: 300 });
       }
+
+      await recordOAuthEvent(env, 'token_issued', { codeNonce: result.nonce, redirectUri, clientId });
 
       const accessToken = await generateAccessToken(apiKey);
       return json({

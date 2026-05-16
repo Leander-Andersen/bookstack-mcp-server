@@ -18,6 +18,14 @@ export interface WorkerEnv {
    * but in that case auth codes are replayable for their 5-minute TTL.
    */
   BOOKSTACK_KV?: KVNamespace;
+
+  /**
+   * Diagnostic KV — short-lived debug events (OAuth flow, etc.). Inspect via
+   * GET /debug/oauth-log?key=<MCP_API_KEY>. Entries auto-expire after 1 hour.
+   * Kept separate from BOOKSTACK_KV so debug noise can be wiped independently
+   * and so a flood of debug writes can't crowd out auth-critical data.
+   */
+  BOOKSTACK_DIAGNOSTIC_KV?: KVNamespace;
 }
 
 /**
