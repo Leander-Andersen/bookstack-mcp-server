@@ -90,21 +90,36 @@ export class BookStackMCPServer {
   private resources: Map<string, MCPResource> = new Map();
 
   constructor(configOverrides?: Partial<Config>) {
-    const baseConfig = ConfigManager.getInstance().getConfig();
+    // On Cloudflare Workers the caller (worker.ts) supplies a fully-built
+    // Config from buildConfigFromEnv(env). process.env has no BOOKSTACK_*
+    // values there, so calling ConfigManager.getInstance() would throw on
+    // bookstack.apiToken validation. Detect that case and skip the merge.
+    const overrideIsComplete =
+      !!configOverrides?.bookstack?.apiToken &&
+      !!configOverrides?.bookstack?.baseUrl &&
+      !!configOverrides?.server &&
+      !!configOverrides?.validation;
 
-    // Merge overrides for every section, not just bookstack.
-    const config: Config = {
-      ...baseConfig,
-      ...(configOverrides ?? {}),
-      bookstack:   { ...baseConfig.bookstack,   ...(configOverrides?.bookstack   ?? {}) },
-      server:      { ...baseConfig.server,      ...(configOverrides?.server      ?? {}) },
-      rateLimit:   { ...baseConfig.rateLimit,   ...(configOverrides?.rateLimit   ?? {}) },
-      validation:  { ...baseConfig.validation,  ...(configOverrides?.validation  ?? {}) },
-      logging:     { ...baseConfig.logging,     ...(configOverrides?.logging     ?? {}) },
-      context7:    { ...baseConfig.context7,    ...(configOverrides?.context7    ?? {}) },
-      security:    { ...baseConfig.security,    ...(configOverrides?.security    ?? {}) },
-      development: { ...baseConfig.development, ...(configOverrides?.development ?? {}) },
-    };
+    let config: Config;
+    if (overrideIsComplete) {
+      config = configOverrides as Config;
+    } else {
+      // Node path: load defaults from process.env (populated by dotenv) and
+      // merge any partial overrides on top.
+      const baseConfig = ConfigManager.getInstance().getConfig();
+      config = {
+        ...baseConfig,
+        ...(configOverrides ?? {}),
+        bookstack:   { ...baseConfig.bookstack,   ...(configOverrides?.bookstack   ?? {}) },
+        server:      { ...baseConfig.server,      ...(configOverrides?.server      ?? {}) },
+        rateLimit:   { ...baseConfig.rateLimit,   ...(configOverrides?.rateLimit   ?? {}) },
+        validation:  { ...baseConfig.validation,  ...(configOverrides?.validation  ?? {}) },
+        logging:     { ...baseConfig.logging,     ...(configOverrides?.logging     ?? {}) },
+        context7:    { ...baseConfig.context7,    ...(configOverrides?.context7    ?? {}) },
+        security:    { ...baseConfig.security,    ...(configOverrides?.security    ?? {}) },
+        development: { ...baseConfig.development, ...(configOverrides?.development ?? {}) },
+      };
+    }
     
     this.logger = Logger.getInstance();
     this.errorHandler = new ErrorHandler(this.logger);
