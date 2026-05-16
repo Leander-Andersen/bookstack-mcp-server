@@ -368,6 +368,11 @@ export default {
 
     const authHeader = request.headers.get('Authorization') ?? '';
     if (!authHeader.startsWith('Bearer ')) {
+      await recordOAuthEvent(env, 'mcp_unauthorized', {
+        reason: 'no_bearer',
+        path: url.pathname,
+        method: request.method,
+      });
       return new Response('Unauthorized', {
         status: 401,
         headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP"', ...VERSION_HEADER },
@@ -377,6 +382,13 @@ export default {
     const token = authHeader.slice('Bearer '.length);
     const tokenValid = await validateAccessToken(apiKey, token);
     if (!tokenValid) {
+      await recordOAuthEvent(env, 'mcp_unauthorized', {
+        reason: 'invalid_token',
+        path: url.pathname,
+        method: request.method,
+        tokenPreview: token.slice(0, 8) + '...' + token.slice(-4),
+        tokenLen: token.length,
+      });
       return new Response('Unauthorized', {
         status: 401,
         headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP", error="invalid_token"', ...VERSION_HEADER },
@@ -385,6 +397,7 @@ export default {
 
     // MCP endpoint
     if (url.pathname !== '/mcp' && url.pathname !== '/message') {
+      await recordOAuthEvent(env, 'mcp_not_found', { path: url.pathname, method: request.method });
       return new Response('Not Found', { status: 404, headers: VERSION_HEADER });
     }
 
@@ -397,15 +410,26 @@ export default {
       try {
         body = await request.json();
       } catch {
+        await recordOAuthEvent(env, 'mcp_bad_json', { path: url.pathname });
         return new Response('Bad Request: invalid JSON', { status: 400 });
       }
     }
+
+    // Log the MCP request shape — the method/id from JSON-RPC bodies is the
+    // most useful single clue when something fails after authentication.
+    const rpcMethod = (body as any)?.method ?? null;
+    const rpcId = (body as any)?.id ?? null;
+    await recordOAuthEvent(env, 'mcp_request', {
+      path: url.pathname,
+      httpMethod: request.method,
+      rpcMethod,
+      rpcId,
+    });
 
     const config = buildConfigFromEnv(env);
 
     try {
       const mcpServer = new BookStackMCPServer(config);
-      // Stateless: a fresh transport per request, session ID is never reused.
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         enableJsonResponse: true,
@@ -414,9 +438,21 @@ export default {
       // but Transport.onclose is required under exactOptionalPropertyTypes.
       transport.onclose = () => {};
       await mcpServer.connect(transport as unknown as Parameters<typeof mcpServer.connect>[0]);
-      return await handleMCPRequest(transport, request, body);
+      const response = await handleMCPRequest(transport, request, body);
+      await recordOAuthEvent(env, 'mcp_response', {
+        rpcMethod,
+        rpcId,
+        status: response.status,
+      });
+      return response;
     } catch (error) {
       console.error('Worker MCP request failed:', error);
+      await recordOAuthEvent(env, 'mcp_error', {
+        rpcMethod,
+        rpcId,
+        error: String(error),
+        stack: (error as Error)?.stack?.slice(0, 500),
+      });
       return new Response('Internal Server Error', { status: 500 });
     }
   },
