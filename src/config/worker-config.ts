@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import { Config } from './manager';
+import { version as PACKAGE_VERSION, name as PACKAGE_NAME } from '../../package.json';
 
 /**
  * Cloudflare Worker environment bindings
@@ -26,6 +27,15 @@ export interface WorkerEnv {
    * and so a flood of debug writes can't crowd out auth-critical data.
    */
   BOOKSTACK_DIAGNOSTIC_KV?: KVNamespace;
+
+  /**
+   * Master toggle for the diagnostic OAuth event log. Set to "true" in the
+   * Cloudflare dashboard (Workers → Variables) to enable. Defaults to
+   * disabled so the Worker doesn't burn KV writes during normal operation.
+   * Flip on temporarily when debugging an auth or MCP failure, then off
+   * again. The /debug/oauth-log endpoint also requires this to be "true".
+   */
+  DIAGNOSTIC_LOG_ENABLED?: string;
 }
 
 /**
@@ -40,8 +50,8 @@ export function buildConfigFromEnv(env: WorkerEnv): Config {
       timeout: 30000,
     },
     server: {
-      name: env.SERVER_NAME ?? 'bookstack-mcp-server',
-      version: env.SERVER_VERSION ?? '1.0.0',
+      name: env.SERVER_NAME ?? PACKAGE_NAME,
+      version: env.SERVER_VERSION ?? PACKAGE_VERSION,
       port: 3000,
     },
     rateLimit: {

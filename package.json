@@ -1,6 +1,6 @@
 {
   "name": "bookstack-mcp-server",
-  "version": "1.2.5",
+  "version": "1.3.0",
   "description": "MCP server providing comprehensive access to BookStack knowledge management system",
   "main": "dist/server-node.js",
   "scripts": {

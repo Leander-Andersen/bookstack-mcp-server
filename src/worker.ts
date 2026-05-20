@@ -17,13 +17,17 @@ import {
   isAllowedRedirectUri,
 } from './utils/oauth';
 
+// Version is sourced from package.json — single source of truth.
+// Update package.json's "version" field; everything else (this constant,
+// server-info responses, env fallback) reads from there at build time.
+import { version as SERVER_VERSION } from '../package.json';
+
 export type { WorkerEnv as Env };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SERVER_VERSION = '1.2.5';
 const VERSION_HEADER = { 'X-MCP-Server-Version': SERVER_VERSION };
 
 function json(data: unknown, status = 200): Response {
@@ -69,6 +73,9 @@ async function recordOAuthEvent(
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
+  // Master toggle — disabled by default to save KV writes. Flip
+  // DIAGNOSTIC_LOG_ENABLED="true" in CF Workers → Variables to enable.
+  if (env.DIAGNOSTIC_LOG_ENABLED !== 'true') return;
   const kv = env.BOOKSTACK_DIAGNOSTIC_KV;
   if (!kv) return;
   const ts = new Date().toISOString();
@@ -127,8 +134,13 @@ export default {
     }
 
     // Diagnostic endpoint — returns recent OAuth events from KV.
-    // Gated by ?key=<MCP_API_KEY> using constant-time compare.
+    // Gated by ?key=<MCP_API_KEY> using constant-time compare AND the
+    // DIAGNOSTIC_LOG_ENABLED env toggle (404 when disabled so the endpoint
+    // doesn't even advertise its existence).
     if (url.pathname === '/debug/oauth-log' && request.method === 'GET') {
+      if (env.DIAGNOSTIC_LOG_ENABLED !== 'true') {
+        return new Response('Not Found', { status: 404, headers: VERSION_HEADER });
+      }
       const apiKey = env.MCP_API_KEY;
       const supplied = url.searchParams.get('key') ?? '';
       if (!apiKey || !constantTimeEq(supplied, apiKey.trim())) {

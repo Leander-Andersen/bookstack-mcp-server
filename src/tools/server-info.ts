@@ -1,5 +1,6 @@
 import { Logger } from '../utils/logger';
 import { MCPTool, MCPServerInfo, ToolCategory, ResourceType, ServerUsageExample, ErrorHandlingInfo } from '../types';
+import { version as SERVER_VERSION } from '../../package.json';
 
 /**
  * Server Information Tools for MCP Self-Description
@@ -69,7 +70,7 @@ export class ServerInfoTools {
 
         const serverInfo: MCPServerInfo = {
           name: 'BookStack MCP Server',
-          version: '1.0.0',
+          version: SERVER_VERSION,
           description: 'Comprehensive MCP server providing full access to BookStack knowledge management system. Enables LLMs to read, write, organize, and manage documentation, books, pages, chapters, users, and system settings.',
           capabilities: {
             tools: {
