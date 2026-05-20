@@ -430,19 +430,40 @@ export default {
 
     try {
       const mcpServer = new BookStackMCPServer(config);
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        enableJsonResponse: true,
-      });
-      // SDK type mismatch: StreamableHTTPServerTransport.onclose is optional,
-      // but Transport.onclose is required under exactOptionalPropertyTypes.
+
+      // Stateless mode: omit sessionIdGenerator entirely. The TS cast is
+      // because @modelcontextprotocol/sdk's option type tightened in 1.29 —
+      // omitting the field is the documented stateless setup but the type
+      // claims the field is required. Setting it to () => crypto.randomUUID()
+      // (a previous attempted fix) accidentally enables session management
+      // with a fresh session per request, which breaks the client because
+      // it never receives a session id to include in follow-up requests.
+      const transportOpts = { enableJsonResponse: true } as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0];
+      const transport = new StreamableHTTPServerTransport(transportOpts);
       transport.onclose = () => {};
       await mcpServer.connect(transport as unknown as Parameters<typeof mcpServer.connect>[0]);
       const response = await handleMCPRequest(transport, request, body);
+
+      // Log the response with enough detail to diagnose SDK-level failures
+      // (where our try/catch wouldn't fire because the SDK swallows the error
+      // and sets res.statusCode itself).
+      let bodyPreview: string | null = null;
+      let bodyLen = 0;
+      try {
+        const cloned = response.clone();
+        const text = await cloned.text();
+        bodyLen = text.length;
+        bodyPreview = text.slice(0, 500);
+      } catch {
+        // ignore — body might not be readable (already streamed)
+      }
       await recordOAuthEvent(env, 'mcp_response', {
         rpcMethod,
         rpcId,
         status: response.status,
+        bodyLen,
+        bodyPreview,
+        responseHeaders: Object.fromEntries(response.headers.entries()),
       });
       return response;
     } catch (error) {
