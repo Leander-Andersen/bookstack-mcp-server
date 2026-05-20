@@ -36,7 +36,34 @@ export class PageTools {
   private createListPagesTools(): MCPTool {
     return {
       name: 'bookstack_pages_list',
-      description: 'List all pages visible to the authenticated user with pagination and filtering options',
+      description: 'List all pages visible to the authenticated user with pagination and filtering options. Pages are the leaf content nodes within books and chapters.',
+      examples: [
+        {
+          description: 'List pages in a specific book',
+          input: { filter: { book_id: 5 } },
+          expected_output: 'Array of page objects belonging to book 5',
+          use_case: 'Scoping to a single book before reading content',
+        },
+        {
+          description: 'Find drafts',
+          input: { filter: { draft: true } },
+          expected_output: 'Pages currently flagged as drafts',
+          use_case: 'Locating unfinished pages for completion',
+        },
+        {
+          description: 'Find templates',
+          input: { filter: { template: true } },
+          expected_output: 'Pages flagged as templates',
+          use_case: 'Discovering reusable page templates',
+        },
+      ],
+      usage_patterns: [
+        'Filter by book_id or chapter_id to scope to a specific container',
+        'Filter by draft:true to find unfinished pages',
+        'Filter by template:true to find page templates',
+        'Use partial name filter for case-insensitive name search',
+      ],
+      related_tools: ['bookstack_pages_read', 'bookstack_books_read', 'bookstack_chapters_read'],
       inputSchema: {
         type: 'object',
         properties: {
