@@ -1,4 +1,10 @@
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+// IMPORTANT: use the Web Standard transport (not the Node.js wrapper).
+// The Node wrapper depends on @hono/node-server which can't translate
+// Cloudflare's native Request/Response objects — it bails internally
+// with a generic 500 + text/plain and no body. The web-standard transport
+// is designed for CF Workers, Deno, Bun, etc. and takes a native Request,
+// returns a native Response.
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { BookStackMCPServer } from './server';
 import { WorkerEnv, buildConfigFromEnv } from './config/worker-config';
 import {
@@ -35,82 +41,17 @@ function html(body: string, status = 200): Response {
 }
 
 /**
- * Bridge between Cloudflare Workers native Request/Response and the
- * Express-style req/res that StreamableHTTPServerTransport.handleRequest() expects.
+ * The Web Standard transport returns a native Response directly. We re-emit
+ * it with our version header attached so every response (including SDK-
+ * generated errors) gets identified.
  */
-async function handleMCPRequest(
-  transport: StreamableHTTPServerTransport,
-  request: Request,
-  body: unknown,
-): Promise<Response> {
-  return new Promise<Response>((resolve, reject) => {
-    const headers: Record<string, string> = { ...VERSION_HEADER };
-    let statusCode = 200;
-    let responseBody = '';
-    let settled = false;
-
-    function doResolve() {
-      if (!settled) {
-        settled = true;
-        resolve(new Response(responseBody || null, { status: statusCode, headers }));
-      }
-    }
-
-    const res: any = {
-      get statusCode() { return statusCode; },
-      set statusCode(v: number) { statusCode = v; },
-      setHeader(key: string, value: string) { headers[key] = value; },
-      getHeader(key: string) { return headers[key]; },
-      write(chunk: string | Uint8Array) {
-        responseBody += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
-      },
-      end(data?: string | Uint8Array) {
-        if (data) responseBody += typeof data === 'string' ? data : new TextDecoder().decode(data);
-        doResolve();
-      },
-      status(code: number) { statusCode = code; return res; },
-      json(data: unknown) {
-        headers['Content-Type'] = 'application/json';
-        res.end(JSON.stringify(data));
-      },
-      send(data: string) { res.end(data); },
-      writeHead(code: number, hdrs?: Record<string, string | string[]>) {
-        statusCode = code;
-        if (hdrs) {
-          for (const [k, v] of Object.entries(hdrs)) {
-            headers[k] = Array.isArray(v) ? v[v.length - 1] : v;
-          }
-        }
-        return res;
-      },
-      removeHeader(key: string) { delete headers[key]; },
-      hasHeader(key: string) { return key in headers; },
-      flushHeaders() {},
-      writableEnded: false,
-      headersSent: false,
-      // EventEmitter stubs — transport calls res.on('close', ...) for SSE cleanup
-      on(_event: string, _listener: (...args: unknown[]) => void) { return res; },
-      once(_event: string, _listener: (...args: unknown[]) => void) { return res; },
-      off(_event: string, _listener: (...args: unknown[]) => void) { return res; },
-      removeListener(_event: string, _listener: (...args: unknown[]) => void) { return res; },
-      emit(_event: string, ..._args: unknown[]) { return false; },
-    };
-
-    const req: any = {
-      method: request.method,
-      headers: Object.fromEntries(request.headers.entries()),
-      body,
-      url: new URL(request.url).pathname,
-    };
-
-    transport.handleRequest(req, res, body)
-      .then(() => {
-        // For GET/SSE the transport stores res but never calls end() — resolve here.
-        // For POST the transport calls res.end() asynchronously after processing,
-        // so doResolve() there would fire too early (before the response is ready).
-        if (request.method === 'GET' || request.method === 'DELETE') doResolve();
-      })
-      .catch(reject);
+function withVersionHeader(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(VERSION_HEADER)) headers.set(k, v);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 
@@ -431,22 +372,21 @@ export default {
     try {
       const mcpServer = new BookStackMCPServer(config);
 
-      // Stateless mode: omit sessionIdGenerator entirely. The TS cast is
-      // because @modelcontextprotocol/sdk's option type tightened in 1.29 —
-      // omitting the field is the documented stateless setup but the type
-      // claims the field is required. Setting it to () => crypto.randomUUID()
-      // (a previous attempted fix) accidentally enables session management
-      // with a fresh session per request, which breaks the client because
-      // it never receives a session id to include in follow-up requests.
-      const transportOpts = { enableJsonResponse: true } as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0];
-      const transport = new StreamableHTTPServerTransport(transportOpts);
-      transport.onclose = () => {};
-      await mcpServer.connect(transport as unknown as Parameters<typeof mcpServer.connect>[0]);
-      const response = await handleMCPRequest(transport, request, body);
+      // Stateless mode — no sessionIdGenerator. Web Standard transport accepts
+      // optional sessionIdGenerator and treats its absence as stateless mode.
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        enableJsonResponse: true,
+      });
+      await mcpServer.connect(transport);
 
-      // Log the response with enough detail to diagnose SDK-level failures
-      // (where our try/catch wouldn't fire because the SDK swallows the error
-      // and sets res.statusCode itself).
+      // Native API — pass the Request directly, get a Response back.
+      // We supply parsedBody so the transport doesn't try to .json() the
+      // already-consumed body stream.
+      const rawResponse = await transport.handleRequest(request, { parsedBody: body });
+      const response = withVersionHeader(rawResponse);
+
+      // Capture response details for diagnostics. Cloning is safe with Web
+      // Standard Response — both streams remain consumable.
       let bodyPreview: string | null = null;
       let bodyLen = 0;
       try {
@@ -455,7 +395,7 @@ export default {
         bodyLen = text.length;
         bodyPreview = text.slice(0, 500);
       } catch {
-        // ignore — body might not be readable (already streamed)
+        // SSE / streaming response — preview not available
       }
       await recordOAuthEvent(env, 'mcp_response', {
         rpcMethod,
