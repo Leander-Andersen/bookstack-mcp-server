@@ -153,6 +153,111 @@ export class BookStackClient implements BookStackAPIClient {
   }
 
   /**
+   * Decode base64 → Uint8Array. Tolerates data-URI prefixes ("data:image/png;base64,...").
+   */
+  private decodeBase64(s: string): Uint8Array {
+    const cleaned = s.replace(/^data:[^;]+;base64,/, '');
+    const binary = atob(cleaned);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  /**
+   * Sniff the file extension from magic bytes. Falls back to "bin".
+   * BookStack uses the filename extension for MIME validation, so getting
+   * this right matters even though we don't set a Content-Type on the Blob.
+   */
+  private sniffExtension(bytes: Uint8Array): string {
+    if (bytes.length >= 8 &&
+        bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'png';
+    if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'jpg';
+    if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'gif';
+    if (bytes.length >= 12 &&
+        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'webp';
+    if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'pdf';
+    return 'bin';
+  }
+
+  /**
+   * multipart/form-data POST. Strips the JSON Content-Type so fetch sets
+   * "multipart/form-data; boundary=..." automatically. Used for binary
+   * uploads (images, attachments) where BookStack does not accept JSON.
+   *
+   * fileFields: keys whose values are base64 strings to be decoded into Blob
+   *             parts; all other entries are sent as plain form fields.
+   */
+  private async requestMultipart<T>(
+    method: 'POST' | 'PUT',
+    path: string,
+    fields: Record<string, unknown>,
+    fileFields: { key: string; nameBase: string }[],
+  ): Promise<T> {
+    const url = `${this.config.bookstack.baseUrl}${path}`;
+    const form = new FormData();
+
+    // Laravel routing quirk: PUT + multipart/form-data does not populate $request->all()
+    // in many Laravel versions. The reliable workaround is POST + _method=PUT.
+    let actualMethod: 'POST' | 'PUT' = method;
+    if (method === 'PUT') {
+      form.append('_method', 'PUT');
+      actualMethod = 'POST';
+    }
+
+    const fileKeys = new Set(fileFields.map(f => f.key));
+    for (const [k, v] of Object.entries(fields)) {
+      if (v === undefined || v === null) continue;
+      if (fileKeys.has(k)) continue;
+      form.append(k, String(v));
+    }
+
+    for (const { key, nameBase } of fileFields) {
+      const raw = fields[key];
+      if (typeof raw !== 'string' || !raw) continue;
+      const bytes = this.decodeBase64(raw);
+      const ext = this.sniffExtension(bytes);
+      const filename = `${(nameBase || key).replace(/[^a-zA-Z0-9._-]/g, '_')}.${ext}`;
+      // BodyInit: Blob wraps the bytes; no explicit type — Laravel infers from the filename.
+      form.append(key, new Blob([bytes]), filename);
+    }
+
+    // Copy auth header, drop Content-Type so fetch sets the multipart boundary.
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(this.baseHeaders)) {
+      if (k.toLowerCase() === 'content-type') continue;
+      headers[k] = v;
+    }
+
+    this.logger.debug('API multipart request', { method: actualMethod, url, fields: Object.keys(fields) });
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: actualMethod,
+        headers,
+        body: form,
+        signal: AbortSignal.timeout(this.config.bookstack.timeout),
+      });
+    } catch (error) {
+      this.logger.error('Fetch network error (multipart)', { url, method: actualMethod, error: String(error) });
+      throw this.errorHandler.handleError(error);
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw this.errorHandler.handleFetchError(response.status, url, actualMethod, body);
+    }
+
+    if (response.status === 204) return undefined as T;
+    try {
+      return await response.json() as T;
+    } catch (error) {
+      throw this.errorHandler.handleError(error);
+    }
+  }
+
+  /**
    * Request that returns raw text (used for export endpoints)
    */
   private async requestText(
@@ -399,6 +504,16 @@ export class BookStackClient implements BookStackAPIClient {
   }
 
   async createAttachment(params: CreateAttachmentParams): Promise<Attachment> {
+    // BookStack accepts file attachments only as multipart/form-data; link
+    // attachments still work as JSON.
+    if ((params as any).file) {
+      return this.requestMultipart<Attachment>(
+        'POST',
+        '/attachments',
+        params as unknown as Record<string, unknown>,
+        [{ key: 'file', nameBase: params.name }],
+      );
+    }
     return this.request<Attachment>('POST', '/attachments', params);
   }
 
@@ -407,6 +522,14 @@ export class BookStackClient implements BookStackAPIClient {
   }
 
   async updateAttachment(id: number, params: UpdateAttachmentParams): Promise<Attachment> {
+    if ((params as any).file) {
+      return this.requestMultipart<Attachment>(
+        'PUT',
+        `/attachments/${id}`,
+        params as unknown as Record<string, unknown>,
+        [{ key: 'file', nameBase: params.name ?? `attachment-${id}` }],
+      );
+    }
     return this.request<Attachment>('PUT', `/attachments/${id}`, params);
   }
 
@@ -420,7 +543,14 @@ export class BookStackClient implements BookStackAPIClient {
   }
 
   async createImage(params: CreateImageParams): Promise<Image> {
-    return this.request<Image>('POST', '/image-gallery', params);
+    // BookStack's /image-gallery POST requires multipart/form-data — the
+    // image field must be a real file part, not a base64 string in JSON.
+    return this.requestMultipart<Image>(
+      'POST',
+      '/image-gallery',
+      params as unknown as Record<string, unknown>,
+      [{ key: 'image', nameBase: params.name }],
+    );
   }
 
   async getImage(id: number): Promise<Image> {
@@ -428,6 +558,16 @@ export class BookStackClient implements BookStackAPIClient {
   }
 
   async updateImage(id: number, params: UpdateImageParams): Promise<Image> {
+    // If the caller is uploading new bytes, go multipart; otherwise a JSON
+    // PUT (rename only) is fine.
+    if ((params as any).image) {
+      return this.requestMultipart<Image>(
+        'PUT',
+        `/image-gallery/${id}`,
+        params as unknown as Record<string, unknown>,
+        [{ key: 'image', nameBase: params.name ?? `image-${id}` }],
+      );
+    }
     return this.request<Image>('PUT', `/image-gallery/${id}`, params);
   }
 

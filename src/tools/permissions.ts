@@ -102,14 +102,14 @@ export class PermissionTools {
             properties: {
               inheriting: {
                 type: 'boolean',
-                description: 'If true, inherits permissions from parent (default).',
+                description: 'If true, this item inherits permissions from its parent. All four boolean flags below are ignored.',
               },
-              view: {
-                type: 'boolean',
-                description: 'If true, restricts access to only specified roles/users.',
-              },
+              view:   { type: 'boolean', description: 'Allow everyone-without-a-role to view. Defaults to false if omitted while inheriting is false.' },
+              create: { type: 'boolean', description: 'Allow everyone-without-a-role to create children. Defaults to false if omitted while inheriting is false.' },
+              update: { type: 'boolean', description: 'Allow everyone-without-a-role to update. Defaults to false if omitted while inheriting is false.' },
+              delete: { type: 'boolean', description: 'Allow everyone-without-a-role to delete. Defaults to false if omitted while inheriting is false.' },
             },
-            description: 'General settings.',
+            description: 'Fallback (no-role) permissions. When inheriting is false, all four flags are sent — missing ones default to false.',
           },
           role_permissions: {
             type: 'array',
@@ -163,6 +163,17 @@ export class PermissionTools {
         const id = this.validator.validateId(content_id);
         this.logger.info('Updating permissions', { content_type, content_id: id });
         const validatedParams = this.validator.validateParams<any>(updateParams, 'contentPermissionsUpdate');
+
+        // BookStack requires all four flags when inheriting is false. Fill in
+        // any the caller omitted with `false` so we don't get a 422 from upstream.
+        const fb = validatedParams.fallback_permissions;
+        if (fb && fb.inheriting === false) {
+          fb.view   = fb.view   ?? false;
+          fb.create = fb.create ?? false;
+          fb.update = fb.update ?? false;
+          fb.delete = fb.delete ?? false;
+        }
+
         return await this.client.updateContentPermissions(content_type, id, validatedParams);
       },
     };

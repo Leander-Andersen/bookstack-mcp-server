@@ -1,9 +1,12 @@
 import { z } from 'zod';
-import { config as dotenvConfig } from 'dotenv';
 import { Logger } from '../utils/logger';
 
-// Load environment variables
-dotenvConfig();
+// Load .env only when running on Node (not on Cloudflare Workers).
+// `process.versions.node` is undefined in the Workers runtime.
+if (typeof process !== 'undefined' && process.versions?.node) {
+  // Dynamic require keeps the dotenv import out of the Worker bundle.
+  require('dotenv').config();
+}
 
 /**
  * Configuration schema using Zod for validation
@@ -37,8 +40,8 @@ export const ConfigSchema = z.object({
     cacheTtl: z.number().positive().default(3600),
   }),
   security: z.object({
-    corsEnabled: z.boolean().default(true),
-    corsOrigin: z.string().default('*'),
+    corsEnabled: z.boolean().default(false),
+    corsOrigin: z.string().default(''),
     helmetEnabled: z.boolean().default(true),
   }),
   development: z.object({
@@ -110,8 +113,8 @@ export class ConfigManager {
         cacheTtl: parseInt(process.env.CONTEXT7_CACHE_TTL || '3600'),
       },
       security: {
-        corsEnabled: process.env.CORS_ENABLED !== 'false',
-        corsOrigin: process.env.CORS_ORIGIN || '*',
+        corsEnabled: process.env.CORS_ENABLED === 'true',
+        corsOrigin: process.env.CORS_ORIGIN || '',
         helmetEnabled: process.env.HELMET_ENABLED !== 'false',
       },
       development: {

@@ -5,10 +5,35 @@ compatibility_flags = ["nodejs_compat_v2"]
 account_id = "fa8dc1730bfd7b376de59d07758e28b5"
 
 [vars]
-SERVER_NAME = "bookstack-mcp-server"
-SERVER_VERSION = "1.2.5"
+# SERVER_NAME and SERVER_VERSION are sourced from package.json at build
+# time (imported in src/config/worker-config.ts). The env-var overrides
+# below still work if you want to set them explicitly, but you don't need
+# to — bumping package.json's version field updates the worker, the
+# server-info tool, and the X-MCP-Server-Version response header all at
+# once. Leave commented out for the default behaviour.
+# SERVER_NAME = "bookstack-mcp-server"
+# SERVER_VERSION = "1.3.0"
+
+# Diagnostic OAuth event log — off by default. Set to "true" in the
+# Cloudflare dashboard (Workers → Variables) when you need to debug an
+# auth/MCP failure, then back to "false" or remove. Toggle is read at
+# runtime so no redeploy needed.
+DIAGNOSTIC_LOG_ENABLED = "false"
 
 # Secrets — set via `wrangler secret put` or the CF dashboard:
 #   npx wrangler secret put BOOKSTACK_BASE_URL
 #   npx wrangler secret put BOOKSTACK_API_TOKEN
 #   npx wrangler secret put MCP_API_KEY
+
+# Primary KV namespace:
+#   - OAuth single-use auth-code enforcement (key prefix: code-used:)
+#   - Future: BookStack response caching (key prefix: cache:)
+[[kv_namespaces]]
+binding = "BOOKSTACK_KV"
+id = "45f216ea7e734af9ab77a324997457a5"
+
+# Diagnostic KV — short-lived debug events (1h TTL).
+# Inspect via:  GET /debug/oauth-log?key=<MCP_API_KEY>
+[[kv_namespaces]]
+binding = "BOOKSTACK_DIAGNOSTIC_KV"
+id = "e3abb3b95b4c4e7097fb85544d5a3afd"

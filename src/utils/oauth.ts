@@ -6,6 +6,34 @@
 const AUTH_CODE_TTL_MS = 5 * 60 * 1000;   // 5 minutes
 const ACCESS_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+/**
+ * Hard-coded allow-list of redirect URI hosts. Only Claude.ai / Claude.com
+ * domains may receive auth codes. Anything else is rejected with no signed code,
+ * which kills the open-redirect / code-theft attack chain.
+ */
+const ALLOWED_REDIRECT_HOSTS = new Set([
+  'claude.ai',
+  'claude.com',
+]);
+
+export function isAllowedRedirectUri(uri: string): boolean {
+  if (!uri) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  if (ALLOWED_REDIRECT_HOSTS.has(host)) return true;
+  // Allow exact subdomains too (e.g. console.claude.ai), but no eTLD trickery.
+  for (const allowed of ALLOWED_REDIRECT_HOSTS) {
+    if (host.endsWith('.' + allowed)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Crypto primitives
 // ---------------------------------------------------------------------------
@@ -54,31 +82,52 @@ function randomNonce(): string {
 // ---------------------------------------------------------------------------
 // Authorization codes  (valid AUTH_CODE_TTL_MS, encode PKCE challenge)
 // Format: {ts}.{nonce}.{b64url(codeChallenge)}.{hmac}
+//
+// The HMAC binds redirect_uri (HIGH-3) so a stolen code can't be redeemed
+// pointing at a different host. We deliberately do NOT bind client_id —
+// Claude.ai's MCP client uses dynamic client registration and the client_id
+// can differ between the authorize and token requests, which would cause
+// HMAC verification failures for legitimate flows. The redirect_uri allow-
+// list (see isAllowedRedirectUri) + the HMAC binding on redirect_uri are
+// sufficient to neutralize the open-redirect / code-theft chain.
 // ---------------------------------------------------------------------------
 
-export async function generateAuthCode(secret: string, codeChallenge: string): Promise<string> {
+export async function generateAuthCode(
+  secret: string,
+  codeChallenge: string,
+  redirectUri: string,
+): Promise<string> {
   const ts = Date.now().toString();
   const nonce = randomNonce();
   const cc = b64url(new TextEncoder().encode(codeChallenge));
-  const payload = `${ts}.${nonce}.${cc}`;
-  const sig = await hmacSign(secret, `code:${payload}`);
-  return `${payload}.${sig}`;
+  const visible = `${ts}.${nonce}.${cc}`;
+  const sig = await hmacSign(secret, `code:${visible}|${redirectUri}`);
+  return `${visible}.${sig}`;
 }
 
+export type AuthCodeResult =
+  | { ok: true; nonce: string }
+  | { ok: false; reason: 'malformed' | 'expired' | 'hmac_mismatch' | 'pkce_mismatch' | 'exception'; detail?: string };
+
+/** Returns success+nonce or failure+reason. Caller logs the reason for debugging. */
 export async function validateAuthCode(
   secret: string,
   code: string,
   codeVerifier: string,
-): Promise<boolean> {
+  redirectUri: string,
+): Promise<AuthCodeResult> {
   try {
     const parts = code.split('.');
-    if (parts.length !== 4) return false;
+    if (parts.length !== 4) return { ok: false, reason: 'malformed', detail: `expected 4 parts, got ${parts.length}` };
     const [ts, nonce, cc, sig] = parts;
 
-    if (Date.now() - parseInt(ts, 10) > AUTH_CODE_TTL_MS) return false;
+    const age = Date.now() - parseInt(ts, 10);
+    if (age > AUTH_CODE_TTL_MS) return { ok: false, reason: 'expired', detail: `${Math.round(age / 1000)}s old` };
 
-    const payload = `${ts}.${nonce}.${cc}`;
-    if (!await hmacVerify(secret, `code:${payload}`, sig)) return false;
+    const visible = `${ts}.${nonce}.${cc}`;
+    if (!await hmacVerify(secret, `code:${visible}|${redirectUri}`, sig)) {
+      return { ok: false, reason: 'hmac_mismatch', detail: `redirect_uri at token = ${redirectUri || '(empty)'}` };
+    }
 
     // PKCE: SHA-256(code_verifier) must equal code_challenge
     const verifierHash = await crypto.subtle.digest(
@@ -87,9 +136,16 @@ export async function validateAuthCode(
     );
     const computed = b64url(new Uint8Array(verifierHash));
     const expected = new TextDecoder().decode(b64urlDecode(cc));
-    return constantTimeEqual(computed, expected);
-  } catch {
-    return false;
+    if (!constantTimeEqual(computed, expected)) {
+      return {
+        ok: false,
+        reason: 'pkce_mismatch',
+        detail: `verifier hashed to ${computed.slice(0, 12)}... expected ${expected.slice(0, 12)}...`,
+      };
+    }
+    return { ok: true, nonce };
+  } catch (e) {
+    return { ok: false, reason: 'exception', detail: String(e) };
   }
 }
 
@@ -147,7 +203,10 @@ export function authorizePage(params: {
   clientId: string;
   error?: boolean;
 }): string {
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const entities: Record<string, string> = {
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  };
+  const esc = (s: string) => s.replace(/[&<>"']/g, c => entities[c]);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

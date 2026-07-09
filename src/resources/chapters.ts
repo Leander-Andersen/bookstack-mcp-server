@@ -15,7 +15,7 @@ export class ChapterResources {
         name: 'Chapters',
         description: 'All chapters in the BookStack instance',
         mimeType: 'application/json',
-        handler: async (uri: string) => await this.client.listChapters(),
+        handler: async (_uri: string) => await this.client.listChapters(),
       },
       {
         uri: 'bookstack://chapters/{id}',
