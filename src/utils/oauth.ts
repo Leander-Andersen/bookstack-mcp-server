@@ -4,7 +4,7 @@
  */
 
 const AUTH_CODE_TTL_MS = 5 * 60 * 1000;   // 5 minutes
-const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const ACCESS_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 // ---------------------------------------------------------------------------
 // Crypto primitives
