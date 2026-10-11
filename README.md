@@ -157,6 +157,39 @@ The token is sent to BookStack as `Authorization: Token abc123:xyz789secret`.
 
 **Pagination** — `fetchAll()` fetches the first page (500 items), reads the `total` field, then fires all remaining pages in parallel.
 
+### MCP audit log (optional, D1)
+
+Every tool call made through this server — arguments, result, duration, outcome
+and the token that asked — plus every OAuth event can be written to a Cloudflare
+D1 database. This is separate from `bookstack_audit_log_list`, which reads
+BookStack's own activity log.
+
+1. Create a database **dedicated to this server** (never share it with the
+   Proxmox MCP server or any other MCP):
+   ```bash
+   npx wrangler d1 create bookstack-mcp-audit
+   ```
+2. Uncomment the `[[d1_databases]]` block in `wrangler.toml` (binding
+   `BOOKSTACK_AUDIT_DB`) and paste the id. There is no schema step; tables are
+   created on first write.
+3. Deploy. `/health` now reports `"audit_configured": true`, and the
+   `bookstack_mcp_audit_log` tool appears for querying the log.
+
+Isolation: the Worker stamps the database with an owner row on first use, keeps
+its own migration ledger (`bookstack_schema_migrations`), and refuses to write
+into a database that already holds another server's audit tables.
+
+Visualising: the `tool_calls` / `auth_events` tables use the same columns as
+proxmox-mcp-server, so a **separate** Hindsight deployment whose `AUDIT_DB` is
+bound to `bookstack-mcp-audit` can display it. (`sudo` is always 0 and `upid`
+always NULL here.)
+
+Optional vars: `AUDIT_ENABLED` (`"false"` to stop), `AUDIT_LOG_READS`
+(`"false"` = mutations only), `AUDIT_RETENTION_DAYS` (default 365, swept nightly
+by the cron trigger), `AUDIT_MAX_FIELD_CHARS` (default 8000). Secret-looking
+argument keys are redacted and upload blobs (`file`, `image`) are dropped; only
+the bearer token's nonce is stored, never the token.
+
 ### Deploying updates
 
 Push to `main`. Cloudflare's GitHub integration deploys automatically — no manual `wrangler deploy` needed. The `X-MCP-Server-Version` response header shows which version is live.

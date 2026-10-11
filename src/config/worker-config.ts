@@ -36,6 +36,25 @@ export interface WorkerEnv {
    * again. The /debug/oauth-log endpoint also requires this to be "true".
    */
   DIAGNOSTIC_LOG_ENABLED?: string;
+
+  /**
+   * MCP audit log — a D1 database recording every tool call and every
+   * authentication event (see src/audit/). Must be a database dedicated to
+   * this server: do NOT reuse the Proxmox MCP server's AUDIT_DB. The schema
+   * refuses to write into a database another server already owns.
+   * Optional — when unbound, nothing is logged and the server works as before.
+   * Viewable with Hindsight by binding a Hindsight deployment to this database.
+   */
+  BOOKSTACK_AUDIT_DB?: D1Database;
+
+  /** "false" stops all audit writes. Default: on whenever the database is bound. */
+  AUDIT_ENABLED?: string;
+  /** "false" records only mutations (create/update/delete/restore). Default: log reads too. */
+  AUDIT_LOG_READS?: string;
+  /** Days of history the nightly sweep keeps. Default 365. */
+  AUDIT_RETENTION_DAYS?: string;
+  /** Per-field character cap on stored arguments/results/errors. Default 8000. */
+  AUDIT_MAX_FIELD_CHARS?: string;
 }
 
 /**

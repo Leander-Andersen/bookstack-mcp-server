@@ -1,3 +1,4 @@
+/// <reference types="@cloudflare/workers-types" />
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
@@ -32,6 +33,8 @@ import { ShelfResources } from './resources/shelves';
 import { UserResources } from './resources/users';
 import { SearchResources } from './resources/search';
 import { MCPTool, MCPResource } from './types';
+import type { Auditor } from './audit/auditor';
+import { McpAuditTools } from './tools/mcp-audit';
 
 const UNTRUSTED_PREFIX =
   '<bookstack-untrusted-data>\n' +
@@ -88,8 +91,19 @@ export class BookStackMCPServer {
   private validator: ValidationHandler;
   private tools: Map<string, MCPTool> = new Map();
   private resources: Map<string, MCPResource> = new Map();
+  private auditor: Auditor | undefined;
+  private auditDb: D1Database | undefined;
 
-  constructor(configOverrides?: Partial<Config>) {
+  /**
+   * @param audit Optional MCP audit logging (Worker only). `auditor` records
+   *   every tool call; `db` additionally registers bookstack_mcp_audit_log so
+   *   the log can be queried. Both point at BOOKSTACK_AUDIT_DB, a database
+   *   dedicated to this server.
+   */
+  constructor(configOverrides?: Partial<Config>, audit?: { auditor?: Auditor | undefined; db?: D1Database | undefined }) {
+    this.auditor = audit?.auditor;
+    this.auditDb = audit?.db;
+
     // On Cloudflare Workers the caller (worker.ts) supplies a fully-built
     // Config from buildConfigFromEnv(env). process.env has no BOOKSTACK_*
     // values there, so calling ConfigManager.getInstance() would throw on
@@ -168,6 +182,7 @@ export class BookStackMCPServer {
       new AuditTools(this.client, this.validator, this.logger),
       new SystemTools(this.client, this.validator, this.logger),
       new ServerInfoTools(this.logger, this.tools, this.resources),
+      ...(this.auditDb ? [new McpAuditTools(this.auditDb)] : []),
     ];
 
     // Register all tools
@@ -243,11 +258,14 @@ export class BookStackMCPServer {
 
       const tool = this.tools.get(name);
       if (!tool) {
+        this.auditor?.toolCall({ tool: name, args, rejected: `Unknown tool: ${name}`, durationMs: 0 });
         throw new Error(`Unknown tool: ${name}`);
       }
 
+      const started = Date.now();
       try {
         const result = await tool.handler(args || {});
+        this.auditor?.toolCall({ tool: name, args, result, durationMs: Date.now() - started });
         this.logger.info(`Tool ${name} completed successfully`);
         return {
           content: [{
@@ -256,6 +274,7 @@ export class BookStackMCPServer {
           }],
         };
       } catch (error) {
+        this.auditor?.toolCall({ tool: name, args, error, durationMs: Date.now() - started });
         this.logger.error(`Tool ${name} failed`, { error: (error as Error).message, stack: (error as Error).stack });
         throw this.errorHandler.handleError(error);
       }

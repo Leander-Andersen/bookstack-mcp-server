@@ -37,3 +37,30 @@ id = "45f216ea7e734af9ab77a324997457a5"
 [[kv_namespaces]]
 binding = "BOOKSTACK_DIAGNOSTIC_KV"
 id = "e3abb3b95b4c4e7097fb85544d5a3afd"
+
+# MCP audit log — every tool call and auth event, in a D1 (SQLite) database.
+# It MUST be a database of its own: do not reuse the Proxmox MCP server's
+# proxmox-mcp-audit database. The Worker checks ownership on first use and
+# refuses to write into a database another MCP server already populated.
+#
+#   npx wrangler d1 create bookstack-mcp-audit     # paste the id below
+#
+# No schema step — the Worker creates its tables on first write (src/audit/).
+# Optional: leave commented out to run without an audit log; /health reports
+# audit_configured either way. The tables match proxmox-mcp-server's, so a
+# separate Hindsight deployment bound to this database can visualise it.
+#
+# Tuning (all optional, set as vars or secrets):
+#   AUDIT_ENABLED="false"        stop writing entirely
+#   AUDIT_LOG_READS="false"      only record create/update/delete/restore
+#   AUDIT_RETENTION_DAYS="365"   nightly sweep deletes anything older
+#   AUDIT_MAX_FIELD_CHARS="8000" per-field cap on stored args/results
+#
+# [[d1_databases]]
+# binding = "BOOKSTACK_AUDIT_DB"
+# database_name = "bookstack-mcp-audit"
+# database_id = "<paste id from wrangler d1 create>"
+
+# Nightly audit retention sweep (no-op when BOOKSTACK_AUDIT_DB is unbound).
+[triggers]
+crons = ["23 4 * * *"]
