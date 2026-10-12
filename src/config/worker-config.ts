@@ -38,14 +38,18 @@ export interface WorkerEnv {
   DIAGNOSTIC_LOG_ENABLED?: string;
 
   /**
-   * MCP audit log — a D1 database recording every tool call and every
-   * authentication event (see src/audit/). Must be a database dedicated to
-   * this server: do NOT reuse the Proxmox MCP server's AUDIT_DB. The schema
-   * refuses to write into a database another server already owns.
-   * Optional — when unbound, nothing is logged and the server works as before.
-   * Viewable with Hindsight by binding a Hindsight deployment to this database.
+   * MCP audit log — the D1 database shared by all MCP servers' audit logs
+   * (see src/audit/migrate.ts). This server writes only its own prefixed
+   * tables (<AUDIT_INSTANCE_ID>_tool_calls / _auth_events) plus its own row in
+   * the shared audit_instances registry. Optional — when unbound, nothing is
+   * logged and the server works as before.
    */
-  BOOKSTACK_AUDIT_DB?: D1Database;
+  AUDIT_DB?: D1Database;
+
+  /** Table prefix / registry id for this deployment. Default "bookstack". */
+  AUDIT_INSTANCE_ID?: string;
+  /** Name viewers show for this instance. Default "BookStack". */
+  AUDIT_DISPLAY_NAME?: string;
 
   /** "false" stops all audit writes. Default: on whenever the database is bound. */
   AUDIT_ENABLED?: string;

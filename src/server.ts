@@ -33,8 +33,9 @@ import { ShelfResources } from './resources/shelves';
 import { UserResources } from './resources/users';
 import { SearchResources } from './resources/search';
 import { MCPTool, MCPResource } from './types';
-import type { Auditor } from './audit/auditor';
+import { isMutating, type Auditor } from './audit/auditor';
 import { McpAuditTools } from './tools/mcp-audit';
+import type { AuditTables } from './audit/migrate';
 
 const UNTRUSTED_PREFIX =
   '<bookstack-untrusted-data>\n' +
@@ -93,16 +94,18 @@ export class BookStackMCPServer {
   private resources: Map<string, MCPResource> = new Map();
   private auditor: Auditor | undefined;
   private auditDb: D1Database | undefined;
+  private auditTables: AuditTables | undefined;
 
   /**
    * @param audit Optional MCP audit logging (Worker only). `auditor` records
    *   every tool call; `db` additionally registers bookstack_mcp_audit_log so
-   *   the log can be queried. Both point at BOOKSTACK_AUDIT_DB, a database
-   *   dedicated to this server.
+   *   the log can be queried, scoped to `tables` (this instance's tables in
+   *   the shared AUDIT_DB).
    */
-  constructor(configOverrides?: Partial<Config>, audit?: { auditor?: Auditor | undefined; db?: D1Database | undefined }) {
+  constructor(configOverrides?: Partial<Config>, audit?: { auditor?: Auditor | undefined; db?: D1Database | undefined; tables?: AuditTables | undefined }) {
     this.auditor = audit?.auditor;
     this.auditDb = audit?.db;
+    this.auditTables = audit?.tables;
 
     // On Cloudflare Workers the caller (worker.ts) supplies a fully-built
     // Config from buildConfigFromEnv(env). process.env has no BOOKSTACK_*
@@ -182,7 +185,7 @@ export class BookStackMCPServer {
       new AuditTools(this.client, this.validator, this.logger),
       new SystemTools(this.client, this.validator, this.logger),
       new ServerInfoTools(this.logger, this.tools, this.resources),
-      ...(this.auditDb ? [new McpAuditTools(this.auditDb)] : []),
+      ...(this.auditDb && this.auditTables ? [new McpAuditTools(this.auditDb, this.auditTables)] : []),
     ];
 
     // Register all tools
@@ -193,6 +196,18 @@ export class BookStackMCPServer {
     });
 
     this.logger.info(`Registered ${this.tools.size} tools`);
+
+    // Publish what each tool means to the audit registry, so a log viewer can
+    // label rows from this server without knowing anything about BookStack.
+    this.auditor?.setTools(
+      Array.from(this.tools.values()).map((tool) => ({
+        name: tool.name,
+        title: tool.name.replace(/^bookstack_/, '').replace(/_/g, ' '),
+        description: tool.description.split('\n')[0].slice(0, 300),
+        category: tool.category,
+        mutating: isMutating(tool.name),
+      })),
+    );
   }
 
   /**
