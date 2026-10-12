@@ -1,9 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
 import { MCPTool } from '../types';
-import { SCHEMA_VERSION } from '../audit/migrate';
+import { SCHEMA_VERSION, type AuditTables } from '../audit/migrate';
 
 /**
- * Reading the MCP audit log (BOOKSTACK_AUDIT_DB) back.
+ * Reading this instance's MCP audit log (its own tables in AUDIT_DB) back.
  *
  * Not to be confused with bookstack_audit_log_list, which reads BookStack's
  * own internal audit log. This one answers "what did this MCP server do, and
@@ -34,7 +34,8 @@ export function parseTime(value: string): number {
 const iso = (ts: number) => new Date(ts).toISOString();
 
 export class McpAuditTools {
-  constructor(private db: D1Database) {}
+  /** Reads only this instance's tables -- never another server's in the shared database. */
+  constructor(private db: D1Database, private tables: AuditTables) {}
 
   getTools(): MCPTool[] {
     return [this.createQueryTool()];
@@ -96,7 +97,7 @@ export class McpAuditTools {
         const rows = await this.db
           .prepare(
             `SELECT id, ts, event, ip, country, user_agent, client_id, token_nonce, detail
-               FROM auth_events WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`,
+               FROM ${this.tables.authEvents} WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`,
           )
           .bind(...params, limit)
           .all<Record<string, unknown>>();
@@ -125,7 +126,7 @@ export class McpAuditTools {
       ].join(', ');
 
       const rows = await this.db
-        .prepare(`SELECT ${columns} FROM tool_calls WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`)
+        .prepare(`SELECT ${columns} FROM ${this.tables.toolCalls} WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`)
         .bind(...params, limit)
         .all<Record<string, unknown>>();
 

@@ -1,7 +1,8 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
  * The MCP audit trail: every tool call and every authentication event this
- * server handles, written to a dedicated D1 database (BOOKSTACK_AUDIT_DB).
+ * server handles, written to its own tables in the shared audit D1 database
+ * (AUDIT_DB) -- see migrate.ts for the layout.
  *
  * This is not BookStack's own audit log (that is `bookstack_audit_log_list`,
  * which reads what happened inside BookStack). This one records what was asked
@@ -18,11 +19,19 @@
  *      tool added later is logged without anyone remembering to log it.
  */
 
-import { ensureSchemaOnce } from './migrate';
+import { ensureSchemaOnce, tablesFor, type InstanceManifest } from './migrate';
 
 // --- Settings ------------------------------------------------------------------
 
 export interface AuditSettings {
+  /**
+   * Prefix for this instance's tables in the shared audit database
+   * (<id>_tool_calls, <id>_auth_events). Give each deployment its own id --
+   * two BookStack servers logging into one database need two ids.
+   */
+  instanceId: string;
+  /** Human name shown by viewers. */
+  displayName: string;
   /** Master switch. Default on whenever the database is bound. */
   enabled: boolean;
   /** Record read-only calls too. Mutations are always recorded. */
@@ -34,6 +43,8 @@ export interface AuditSettings {
 }
 
 export interface AuditEnv {
+  AUDIT_INSTANCE_ID?: string;
+  AUDIT_DISPLAY_NAME?: string;
   AUDIT_ENABLED?: string;
   AUDIT_LOG_READS?: string;
   AUDIT_RETENTION_DAYS?: string;
@@ -48,6 +59,10 @@ function intSetting(value: string | undefined, fallback: number, min: number, ma
 
 export function auditSettingsFromEnv(env: AuditEnv): AuditSettings {
   return {
+    // Validated where it is turned into table names (tablesFor), so a bad
+    // value fails the audit write, never the request.
+    instanceId: (env.AUDIT_INSTANCE_ID ?? 'bookstack').trim(),
+    displayName: env.AUDIT_DISPLAY_NAME?.trim() || 'BookStack',
     enabled: env.AUDIT_ENABLED !== 'false',
     logReads: env.AUDIT_LOG_READS !== 'false',
     retentionDays: intSetting(env.AUDIT_RETENTION_DAYS, 365, 1, 3650),
@@ -209,6 +224,24 @@ export class Auditor {
     private readonly settings: AuditSettings,
   ) {}
 
+  /** Tool metadata for the registry; set once the MCP server has registered its tools. */
+  private toolList: InstanceManifest['tools'];
+
+  setTools(tools: InstanceManifest['tools']): void {
+    this.toolList = tools;
+  }
+
+  /** Registry entry describing this instance: what it logs and what its tools mean. */
+  manifest(): InstanceManifest {
+    return instanceManifest(this.settings, this.toolList);
+  }
+
+  private async ready(db: D1Database) {
+    const tables = tablesFor(this.settings.instanceId);
+    await ensureSchemaOnce(db, tables, () => this.manifest());
+    return tables;
+  }
+
   get configured(): boolean {
     return Boolean(this.db);
   }
@@ -250,10 +283,10 @@ export class Auditor {
             : String(record.error)
           : null;
 
-      await ensureSchemaOnce(db);
+      const t = await this.ready(db);
       await db
         .prepare(
-          `INSERT INTO tool_calls (
+          `INSERT INTO ${t.toolCalls} (
              ts, request_id, actor_nonce, actor_issued, client_id, ip, country, user_agent,
              tool, mutating, sudo, target, args_json, args_bytes,
              status, duration_ms, result_json, result_bytes, error, upid
@@ -289,10 +322,10 @@ export class Auditor {
     const db = this.db;
     if (!db || !this.settings.enabled) return;
     this.enqueue(async () => {
-      await ensureSchemaOnce(db);
+      const t = await this.ready(db);
       await db
         .prepare(
-          `INSERT INTO auth_events (ts, request_id, event, ip, country, user_agent, client_id, token_nonce, detail)
+          `INSERT INTO ${t.authEvents} (ts, request_id, event, ip, country, user_agent, client_id, token_nonce, detail)
            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)`,
         )
         .bind(
@@ -311,6 +344,33 @@ export class Auditor {
   }
 }
 
+// --- Registry manifest ---------------------------------------------------------
+
+/**
+ * What goes into this instance's audit_instances row. Viewers read it to know
+ * which tables to query, which events may be missing (logs_reads=false), and
+ * how to label each tool.
+ */
+export function instanceManifest(
+  settings: AuditSettings,
+  tools?: InstanceManifest['tools'],
+): InstanceManifest {
+  return {
+    displayName: settings.displayName,
+    settings: {
+      enabled: settings.enabled,
+      logs_tool_calls: true,
+      logs_reads: settings.logReads,
+      logs_auth_events: true,
+      retention_days: settings.retentionDays,
+      max_field_chars: settings.maxFieldChars,
+      redacts: ['secret-like argument keys', 'file/image upload payloads', 'bearer token signature'],
+      unused_columns: ['sudo', 'upid', 'actor_label'],
+    },
+    tools,
+  };
+}
+
 // --- Retention --------------------------------------------------------------------
 
 const SWEEP_BATCH = 5_000;
@@ -327,8 +387,9 @@ export interface SweepResult {
 export async function sweepAuditLog(db: D1Database, settings: AuditSettings): Promise<SweepResult> {
   const cutoff = Date.now() - settings.retentionDays * 86_400_000;
   const result: SweepResult = { cutoff, tool_calls: 0, auth_events: 0, incomplete: false };
+  const t = tablesFor(settings.instanceId);
 
-  for (const table of ['tool_calls', 'auth_events'] as const) {
+  for (const [key, table] of [['tool_calls', t.toolCalls], ['auth_events', t.authEvents]] as const) {
     let batches = 0;
     for (;;) {
       const deleted = await db
@@ -338,7 +399,7 @@ export async function sweepAuditLog(db: D1Database, settings: AuditSettings): Pr
         .bind(cutoff)
         .run();
       const changes = deleted.meta?.changes ?? 0;
-      result[table] += changes;
+      result[key] += changes;
       if (changes < SWEEP_BATCH) break;
       if (++batches >= SWEEP_MAX_BATCHES) {
         result.incomplete = true;

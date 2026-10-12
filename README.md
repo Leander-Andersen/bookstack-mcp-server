@@ -157,38 +157,45 @@ The token is sent to BookStack as `Authorization: Token abc123:xyz789secret`.
 
 **Pagination** — `fetchAll()` fetches the first page (500 items), reads the `total` field, then fires all remaining pages in parallel.
 
-### MCP audit log (optional, D1)
+### MCP audit log (optional, shared D1)
 
 Every tool call made through this server — arguments, result, duration, outcome
-and the token that asked — plus every OAuth event can be written to a Cloudflare
-D1 database. This is separate from `bookstack_audit_log_list`, which reads
+and the token that asked — plus every OAuth event is written to a Cloudflare D1
+database. This is separate from `bookstack_audit_log_list`, which reads
 BookStack's own activity log.
 
-1. Create a database **dedicated to this server** (never share it with the
-   Proxmox MCP server or any other MCP):
-   ```bash
-   npx wrangler d1 create bookstack-mcp-audit
-   ```
-2. Uncomment the `[[d1_databases]]` block in `wrangler.toml` (binding
-   `BOOKSTACK_AUDIT_DB`) and paste the id. There is no schema step; tables are
-   created on first write.
-3. Deploy. `/health` now reports `"audit_configured": true`, and the
-   `bookstack_mcp_audit_log` tool appears for querying the log.
+**One database, many servers.** To stay within Workers Free, all MCP servers log
+into the same D1 (`AUDIT_DB`, currently the `proxmox-mcp-audit` database). They
+do not share a schema: each instance has its own prefixed tables and migration
+ledger, and never reads or writes another's.
 
-Isolation: the Worker stamps the database with an owner row on first use, keeps
-its own migration ledger (`bookstack_schema_migrations`), and refuses to write
-into a database that already holds another server's audit tables.
+| Table | Owner | Contents |
+|---|---|---|
+| `audit_instances` | shared registry, one row per instance | where the instance's tables are, `settings_json` (what it logs: reads or not, retention, redaction, unused columns), `tools_json` (label, description, mutating flag for every tool) |
+| `<id>_tool_calls` | this instance | one row per tool call |
+| `<id>_auth_events` | this instance | authorize / token / access-denied events |
+| `<id>_schema_migrations` | this instance | migration ledger |
 
-Visualising: the `tool_calls` / `auth_events` tables use the same columns as
-proxmox-mcp-server, so a **separate** Hindsight deployment whose `AUDIT_DB` is
-bound to `bookstack-mcp-audit` can display it. (`sudo` is always 0 and `upid`
-always NULL here.)
+`<id>` is `AUDIT_INSTANCE_ID` (default `bookstack`). A second BookStack
+deployment logging into the same database just needs a different id. Each
+instance can only update its own registry row; reusing an id another server
+registered makes audit writes fail with an error instead of mixing data.
 
-Optional vars: `AUDIT_ENABLED` (`"false"` to stop), `AUDIT_LOG_READS`
-(`"false"` = mutations only), `AUDIT_RETENTION_DAYS` (default 365, swept nightly
-by the cron trigger), `AUDIT_MAX_FIELD_CHARS` (default 8000). Secret-looking
-argument keys are redacted and upload blobs (`file`, `image`) are dropped; only
-the bearer token's nonce is stored, never the token.
+A viewer (Hindsight) discovers instances by reading `audit_instances` and then
+queries the tables each row names. The per-instance tables have the same columns
+as proxmox-mcp-server's `tool_calls` / `auth_events`, so they render the same way.
+
+Setup: the `[[d1_databases]]` block in `wrangler.toml` already points at the
+shared database; deploy and `/health` reports `"audit_configured": true` and
+`"audit_instance": "bookstack"`. The `bookstack_mcp_audit_log` tool queries this
+instance's rows.
+
+Optional vars: `AUDIT_INSTANCE_ID`, `AUDIT_DISPLAY_NAME`, `AUDIT_ENABLED`
+(`"false"` to stop), `AUDIT_LOG_READS` (`"false"` = mutations only),
+`AUDIT_RETENTION_DAYS` (default 365, swept nightly by the cron trigger, own
+tables only), `AUDIT_MAX_FIELD_CHARS` (default 8000). Secret-looking argument
+keys are redacted and upload blobs (`file`, `image`) are dropped; only the
+bearer token's nonce is stored, never the token.
 
 ### Deploying updates
 

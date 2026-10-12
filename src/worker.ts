@@ -16,8 +16,8 @@ import {
   validateAccessToken,
   isAllowedRedirectUri,
 } from './utils/oauth';
-import { Auditor, actorFromRequest, actorFromToken, auditSettingsFromEnv, sweepAuditLog } from './audit/auditor';
-import { SCHEMA_VERSION, ensureSchemaOnce } from './audit/migrate';
+import { Auditor, actorFromRequest, actorFromToken, auditSettingsFromEnv, instanceManifest, sweepAuditLog } from './audit/auditor';
+import { SCHEMA_VERSION, ensureSchemaOnce, tablesFor } from './audit/migrate';
 
 // Version is sourced from package.json — single source of truth.
 // Update package.json's "version" field; everything else (this constant,
@@ -128,10 +128,10 @@ export default {
     const url = new URL(request.url);
     const baseUrl = `${url.protocol}//${url.host}`;
 
-    // MCP audit log (BOOKSTACK_AUDIT_DB). A no-op when the binding is absent.
+    // MCP audit log (AUDIT_DB, shared; this instance writes only its own tables). A no-op when the binding is absent.
     const auditSettings = auditSettingsFromEnv(env);
     const audit = new Auditor(
-      env.BOOKSTACK_AUDIT_DB,
+      env.AUDIT_DB,
       ctx,
       actorFromRequest(request, crypto.randomUUID()),
       auditSettings,
@@ -143,9 +143,10 @@ export default {
     if (url.pathname === '/health' && request.method === 'GET') {
       return json({
         status: 'ok',
-        audit_configured: Boolean(env.BOOKSTACK_AUDIT_DB),
-        audit_enabled: Boolean(env.BOOKSTACK_AUDIT_DB) && auditSettings.enabled,
+        audit_configured: Boolean(env.AUDIT_DB),
+        audit_enabled: Boolean(env.AUDIT_DB) && auditSettings.enabled,
         audit_schema_version: SCHEMA_VERSION,
+        audit_instance: auditSettings.instanceId,
       });
     }
 
@@ -416,9 +417,16 @@ export default {
     const config = buildConfigFromEnv(env);
 
     try {
+      let auditTables;
+      try {
+        auditTables = tablesFor(auditSettings.instanceId);
+      } catch (e) {
+        console.error(`audit: ${(e as Error).message}`);
+      }
       const mcpServer = new BookStackMCPServer(config, {
         auditor: audit,
-        db: env.BOOKSTACK_AUDIT_DB,
+        db: env.AUDIT_DB,
+        tables: auditTables,
       });
 
       // Stateless mode — no sessionIdGenerator. Web Standard transport accepts
@@ -473,12 +481,16 @@ export default {
    * AUDIT_RETENTION_DAYS.
    */
   async scheduled(_event: ScheduledController, env: WorkerEnv, ctx: ExecutionContext): Promise<void> {
-    const db = env.BOOKSTACK_AUDIT_DB;
+    const db = env.AUDIT_DB;
     if (!db) return;
     const settings = auditSettingsFromEnv(env);
     ctx.waitUntil(
       (async () => {
-        const schema = await ensureSchemaOnce(db);
+        // No tool list here (no MCP server is built for a cron run), so the
+        // registry keeps the tools_json written by the last request.
+        const schema = await ensureSchemaOnce(db, tablesFor(settings.instanceId), () =>
+          instanceManifest(settings),
+        );
         if (schema.applied.length) {
           console.log(`audit schema: applied migrations ${schema.applied.join(', ')}`);
         }
