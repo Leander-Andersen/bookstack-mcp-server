@@ -7,7 +7,7 @@ try {
   DatabaseSync = undefined;
 }
 const describeDb = DatabaseSync ? describe : describe.skip;
-import { Auditor, auditSettingsFromEnv, describeTarget, isMutating, redact, sweepAuditLog } from '../../src/audit/auditor';
+import { Auditor, auditSettingsFromEnv, describeTarget, isMutating, redact, sweepAuditLog, toolPhrasing } from '../../src/audit/auditor';
 import { ensureSchema, InstanceConflictError, resetSchemaMemo, tablesFor } from '../../src/audit/migrate';
 import { McpAuditTools } from '../../src/tools/mcp-audit';
 
@@ -196,6 +196,12 @@ describe('classification helpers', () => {
     expect(describeTarget('bookstack_pages_create', { book_id: 2, name: 'x' })).toBe('book:2');
     expect(describeTarget('bookstack_attachments_create', { uploaded_to: 9 })).toBe('page:9');
     expect(describeTarget('bookstack_search', { query: 'vpn' })).toBe('search:vpn');
+  });
+
+  it('publishes phrasing for viewers', () => {
+    expect(toolPhrasing('bookstack_pages_delete')).toEqual({ past: 'Deleted', infinitive: 'delete', object: 'a page' });
+    expect(toolPhrasing('bookstack_books_list')).toMatchObject({ past: 'Listed', object: 'books' });
+    expect(toolPhrasing('bookstack_help')).toEqual({});
   });
 
   it('redacts secrets and upload blobs', () => {

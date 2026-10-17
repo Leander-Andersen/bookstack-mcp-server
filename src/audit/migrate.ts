@@ -173,7 +173,17 @@ export interface InstanceManifest {
    * Undefined leaves the stored list untouched (e.g. from the cron handler,
    * which never builds the MCP server).
    */
-  tools?: Array<{ name: string; title: string; description: string; category?: string | undefined; mutating: boolean }> | undefined;
+  tools?: Array<{
+    name: string;
+    title: string;
+    description: string;
+    category?: string | undefined;
+    mutating: boolean;
+    /** Optional phrasing for viewers: "Deleted" / "delete" / "a page". */
+    past?: string | undefined;
+    infinitive?: string | undefined;
+    object?: string | undefined;
+  }> | undefined;
 }
 
 export interface SchemaState {

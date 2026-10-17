@@ -33,7 +33,7 @@ import { ShelfResources } from './resources/shelves';
 import { UserResources } from './resources/users';
 import { SearchResources } from './resources/search';
 import { MCPTool, MCPResource } from './types';
-import { isMutating, type Auditor } from './audit/auditor';
+import { isMutating, toolPhrasing, type Auditor } from './audit/auditor';
 import { McpAuditTools } from './tools/mcp-audit';
 import type { AuditTables } from './audit/migrate';
 
@@ -206,6 +206,7 @@ export class BookStackMCPServer {
         description: tool.description.split('\n')[0].slice(0, 300),
         category: tool.category,
         mutating: isMutating(tool.name),
+        ...toolPhrasing(tool.name),
       })),
     );
   }

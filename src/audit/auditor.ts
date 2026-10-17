@@ -197,6 +197,34 @@ export function describeTarget(tool: string, args: Args): string | undefined {
   return undefined;
 }
 
+/** Past / infinitive verbs per tool action, for the registry's manifest. */
+const VERBS: Record<string, [string, string]> = {
+  list: ['Listed', 'list'],
+  read: ['Read', 'read'],
+  create: ['Created', 'create'],
+  update: ['Updated', 'update'],
+  delete: ['Deleted', 'delete'],
+  delete_permanently: ['Permanently deleted', 'permanently delete'],
+  restore: ['Restored', 'restore'],
+  export: ['Exported', 'export'],
+};
+
+/**
+ * How a viewer should phrase a call to this tool: "Deleted page 12", or, when
+ * the call has no target, "Listed books". Optional fields in the registry's
+ * tools_json -- a viewer that ignores them falls back to a generic sentence.
+ */
+export function toolPhrasing(tool: string): { past?: string; infinitive?: string; object?: string } {
+  if (tool === 'bookstack_search') return { past: 'Searched', infinitive: 'search', object: 'BookStack' };
+  const match = /^bookstack_([a-z]+)_(.+)$/.exec(tool);
+  if (!match) return {};
+  const [, resource, action] = match;
+  const verbs = VERBS[action];
+  if (!verbs) return {};
+  const object = resource === 'recyclebin' ? 'the recycle bin' : action === 'list' ? resource : `a ${ENTITY[resource] ?? resource}`;
+  return { past: verbs[0], infinitive: verbs[1], object };
+}
+
 // --- The auditor ------------------------------------------------------------------
 
 export interface ToolCallRecord {
