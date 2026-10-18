@@ -39,3 +39,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local wrangler secrets (wrangler dev)
+.dev.vars
+.dev.vars.*
