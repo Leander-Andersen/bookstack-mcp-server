@@ -16,6 +16,7 @@ import {
   validateAccessToken,
   isAllowedRedirectUri,
 } from './utils/oauth';
+import { AUDIT_SINK, Auditor, actorFromRequest, actorFromToken, auditSettingsFromEnv } from './audit/auditor';
 
 // Version is sourced from package.json — single source of truth.
 // Update package.json's "version" field; everything else (this constant,
@@ -107,6 +108,16 @@ async function readOAuthEvents(env: WorkerEnv, limit = 50): Promise<unknown[]> {
   return events.filter(Boolean);
 }
 
+/** A redirect URI for the audit log: origin and path only, no query or fragment. */
+function uriForLog(uri: string): string {
+  try {
+    const u = new URL(uri);
+    return `${u.origin}${u.pathname}`.slice(0, 200);
+  } catch {
+    return uri.slice(0, 100);
+  }
+}
+
 function constantTimeEq(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   const enc = new TextEncoder();
@@ -122,15 +133,30 @@ function constantTimeEq(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const baseUrl = `${url.protocol}//${url.host}`;
+
+    // MCP audit log: events go to the central log over the LOGGER binding.
+    // A no-op when the binding is absent.
+    const auditSettings = auditSettingsFromEnv(env);
+    const audit = new Auditor(
+      env.LOGGER,
+      ctx,
+      actorFromRequest(request, crypto.randomUUID()),
+      auditSettings,
+    );
 
     // ── Public routes (no auth) ─────────────────────────────────────────────
 
     // Health check
     if (url.pathname === '/health' && request.method === 'GET') {
-      return json({ status: 'ok' });
+      return json({
+        status: 'ok',
+        audit_configured: Boolean(env.LOGGER),
+        audit_enabled: Boolean(env.LOGGER) && auditSettings.enabled,
+        audit_sink: AUDIT_SINK,
+      });
     }
 
     // Diagnostic endpoint — returns recent OAuth events from KV.
@@ -189,6 +215,7 @@ export default {
         // Reject untrusted redirect targets BEFORE showing the password form.
         if (!isAllowedRedirectUri(redirectUri)) {
           await recordOAuthEvent(env, 'authorize_get_rejected', { reason: 'redirect_uri_not_allowed', redirectUri });
+          audit.authEvent('authorize_rejected', { clientId, detail: `redirect_uri not allowed: ${uriForLog(redirectUri)}` });
           return json({
             error: 'invalid_request',
             error_description: 'redirect_uri is not on the allow-list (claude.ai / claude.com only)',
@@ -209,6 +236,7 @@ export default {
         // Re-check on POST — a malicious page could craft a form that bypasses
         // the GET check by submitting directly with its own redirect_uri.
         if (!isAllowedRedirectUri(redirectUri)) {
+          audit.authEvent('authorize_rejected', { clientId, detail: `redirect_uri not allowed: ${uriForLog(redirectUri)}` });
           return json({ error: 'invalid_request', error_description: 'redirect_uri not allowed' }, 400);
         }
 
@@ -222,6 +250,7 @@ export default {
 
         if (diff !== 0) {
           await recordOAuthEvent(env, 'authorize_post_bad_password', { clientId, redirectUri });
+          audit.authEvent('authorize_fail', { clientId, detail: 'wrong password' });
           return html(authorizePage({ redirectUri, state, codeChallenge, clientId, error: true }));
         }
 
@@ -229,6 +258,7 @@ export default {
         // (We intentionally don't bind client_id — see generateAuthCode docstring.)
         const code = await generateAuthCode(apiKey, codeChallenge, redirectUri);
         const codeNonce = code.split('.')[1];
+        audit.authEvent('authorize_ok', { clientId, detail: `redirect_uri=${uriForLog(redirectUri)}` });
         await recordOAuthEvent(env, 'authorize_post_ok', {
           clientId, redirectUri, codeNonce,
           hasCodeChallenge: !!codeChallenge,
@@ -277,6 +307,7 @@ export default {
 
       if (grantType !== 'authorization_code') {
         await recordOAuthEvent(env, 'token_rejected', { reason: 'unsupported_grant_type', grantType });
+        audit.authEvent('token_denied', { clientId, detail: `unsupported grant_type: ${(grantType ?? '(none)').slice(0, 60)}` });
         return json({ error: 'unsupported_grant_type' }, 400);
       }
 
@@ -289,6 +320,7 @@ export default {
           redirectUri,
           codeNonce,
         });
+        audit.authEvent('token_denied', { clientId, detail: String(result.reason).slice(0, 200) });
         return json({ error: 'invalid_grant', error_description: `Invalid or expired authorization code (${result.reason})` }, 400);
       }
 
@@ -299,6 +331,7 @@ export default {
         const already = await env.BOOKSTACK_KV.get(consumedKey);
         if (already) {
           await recordOAuthEvent(env, 'token_rejected', { reason: 'code_already_used', codeNonce: result.nonce });
+          audit.authEvent('token_replay', { clientId, detail: 'authorization code already used' });
           return json({ error: 'invalid_grant', error_description: 'Authorization code already used' }, 400);
         }
         await env.BOOKSTACK_KV.put(consumedKey, '1', { expirationTtl: 300 });
@@ -307,6 +340,12 @@ export default {
       await recordOAuthEvent(env, 'token_issued', { codeNonce: result.nonce, redirectUri, clientId });
 
       const accessToken = await generateAccessToken(apiKey);
+      // The nonce (never the token) is what gives actor.id on tool-call events a meaning.
+      audit.authEvent('token_issued', {
+        clientId,
+        tokenNonce: actorFromToken(accessToken).nonce,
+        detail: `redirect_uri=${uriForLog(redirectUri)}`,
+      });
       return json({
         access_token: accessToken,
         token_type: 'Bearer',
@@ -326,6 +365,7 @@ export default {
         path: url.pathname,
         method: request.method,
       });
+      audit.authEvent('access_denied', { detail: `no bearer token on ${url.pathname}`.slice(0, 200) });
       return new Response('Unauthorized', {
         status: 401,
         headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP"', ...VERSION_HEADER },
@@ -342,6 +382,8 @@ export default {
         tokenPreview: token.slice(0, 8) + '...' + token.slice(-4),
         tokenLen: token.length,
       });
+      // The nonce on a rejected token is unverified (the signature failed), so say so.
+      audit.authEvent('access_denied', { detail: `invalid or expired token on ${url.pathname} (nonce unverified)`.slice(0, 200) });
       return new Response('Unauthorized', {
         status: 401,
         headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP", error="invalid_token"', ...VERSION_HEADER },
@@ -382,7 +424,7 @@ export default {
     const config = buildConfigFromEnv(env);
 
     try {
-      const mcpServer = new BookStackMCPServer(config);
+      const mcpServer = new BookStackMCPServer(config, { auditor: audit, source: env.LOGGER });
 
       // Stateless mode — no sessionIdGenerator. Web Standard transport accepts
       // optional sessionIdGenerator and treats its absence as stateless mode.
