@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import { Config } from './manager';
+import type { SourceBinding } from '../audit/auditor';
 import { version as PACKAGE_VERSION, name as PACKAGE_NAME } from '../../package.json';
 
 /**
@@ -36,6 +37,25 @@ export interface WorkerEnv {
    * again. The /debug/oauth-log endpoint also requires this to be "true".
    */
   DIAGNOSTIC_LOG_ENABLED?: string;
+
+  /**
+   * MCP audit log -- service binding to the owner's central log (ULV's
+   * `Source` entrypoint, see wrangler.toml). Identity comes from the binding's
+   * props, so there is no key. Optional: when unbound, nothing is logged and
+   * the server works as before.
+   */
+  LOGGER?: SourceBinding;
+
+  // The knobs below are optional and meant to be set as dashboard variables,
+  // not in wrangler.toml [vars] (which would overwrite them on every deploy).
+  /** "false" sends nothing. Default: on whenever LOGGER is bound. */
+  AUDIT_ENABLED?: string;
+  /** "false" sends only mutations (create/update/delete/restore) and auth events. */
+  AUDIT_LOG_READS?: string;
+  /** Per-field character cap on sent arguments/results/errors. Default 8000, max 32000. */
+  AUDIT_MAX_FIELD_CHARS?: string;
+  /** Name the log viewer shows for this server. Default "BookStack". */
+  AUDIT_DISPLAY_NAME?: string;
 }
 
 /**

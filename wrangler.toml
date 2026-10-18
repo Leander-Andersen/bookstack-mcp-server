@@ -37,3 +37,26 @@ id = "45f216ea7e734af9ab77a324997457a5"
 [[kv_namespaces]]
 binding = "BOOKSTACK_DIAGNOSTIC_KV"
 id = "e3abb3b95b4c4e7097fb85544d5a3afd"
+
+# MCP audit log -- every tool call and auth event is sent to the owner's
+# central log, the "unified-logging-and-visualisation" Worker (ULV), over this
+# service binding to its `Source` entrypoint. No database, no key, no secret:
+#
+#   props.service is this server's identity in the log ("bookstack"). Props are
+#   set here, at deploy time, and the Worker's own code cannot change them, so
+#   only someone with deploy rights can speak as this service. ULV discovers
+#   the server on its first event; there is nothing to set up on its side.
+#   Retention and the viewer are ULV's job. Remove this block to run without
+#   an audit log (/health reports audit_configured either way).
+#
+# Optional dashboard variables (Workers -> Settings -> Variables). Deliberately
+# NOT in [vars] above: [vars] would overwrite the dashboard value on deploy.
+#   AUDIT_ENABLED="false"          send nothing
+#   AUDIT_LOG_READS="false"        only create/update/delete/restore + auth events
+#   AUDIT_MAX_FIELD_CHARS="8000"   per-field cap on sent args/results (max 32000)
+#   AUDIT_DISPLAY_NAME="BookStack" name shown in the viewer
+[[services]]
+binding = "LOGGER"
+service = "unified-logging-and-visualisation"
+entrypoint = "Source"
+props = { service = "bookstack" }

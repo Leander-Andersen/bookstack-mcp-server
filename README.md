@@ -157,6 +157,42 @@ The token is sent to BookStack as `Authorization: Token abc123:xyz789secret`.
 
 **Pagination** — `fetchAll()` fetches the first page (500 items), reads the `total` field, then fires all remaining pages in parallel.
 
+### Audit logging (optional, via ULV)
+
+Every tool call this server handles, and every OAuth event (authorize, token
+issued, access denied, replay), is sent to the owner's central log, the
+`unified-logging-and-visualisation` Worker (ULV), over a Cloudflare service
+binding. This is separate from `bookstack_audit_log_list`, which reads
+BookStack's own activity log.
+
+The binding is the whole setup: the `[[services]]` block in `wrangler.toml`
+binds `LOGGER` to ULV's `Source` entrypoint, and its `props = { service =
+"bookstack" }` is this server's identity in the log. There is no key or secret;
+props are set at deploy time and the Worker's code cannot change them. ULV
+discovers the server on its first event, and owns retention and the viewer.
+
+- **What is sent** per event: tool name, target (`page:12`), status (`ok`,
+  `error`, `rejected` for unknown tools or invalid arguments, `denied` for auth
+  refusals), duration, redacted arguments, the result (or error text), and the
+  actor: the bearer token's nonce (never the token), IP, country, user agent.
+  Secret-looking argument keys are redacted and `file`/`image` upload payloads
+  are replaced by their length.
+- **Never blocks a call.** Events are sent in one batch inside `waitUntil`;
+  failures are a `console.warn`. With `LOGGER` unbound the server behaves as before.
+- **Manifest.** Once per isolate the server describes itself (version, settings,
+  every tool's title, category, mutating flag and verbs) so the viewer can label
+  events without knowing BookStack.
+- **`bookstack_mcp_audit_log`** (registered only when `LOGGER` is bound) reads
+  this server's own recent events back (`limit`, `before`, `name`, `status`,
+  `kind`, `since`). Its output is wrapped as untrusted data like any other tool result.
+- `/health` reports `audit_configured`, `audit_enabled` and `audit_sink`.
+
+Optional variables, set in the Cloudflare dashboard (Workers, Settings,
+Variables), not in `wrangler.toml` `[vars]`, which would overwrite them on every
+deploy: `AUDIT_ENABLED` (`"false"` sends nothing), `AUDIT_LOG_READS` (`"false"`
+sends only mutations and auth events), `AUDIT_MAX_FIELD_CHARS` (default 8000,
+max 32000), `AUDIT_DISPLAY_NAME` (default `BookStack`).
+
 ### Deploying updates
 
 Push to `main`. Cloudflare's GitHub integration deploys automatically — no manual `wrangler deploy` needed. The `X-MCP-Server-Version` response header shows which version is live.
