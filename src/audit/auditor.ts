@@ -9,7 +9,8 @@
  * of *this MCP server*, by which token, from where, and what came back.
  *
  * Modelled on proxmox-mcp-server's auditor, and written to the same table
- * layout so Hindsight can visualise it. Three properties carry over:
+ * layout so ULV (the unified-logging-and-visualisation viewer) can display
+ * it. Three properties carry over:
  *
  *   1. Logging never changes the outcome of the thing being logged. Writes go
  *      through waitUntil and a failure is a console.error, never a failed call.
@@ -36,8 +37,6 @@ export interface AuditSettings {
   enabled: boolean;
   /** Record read-only calls too. Mutations are always recorded. */
   logReads: boolean;
-  /** Rows older than this are deleted by the nightly sweep. */
-  retentionDays: number;
   /** Cap per stored text field (arguments, result, error). */
   maxFieldChars: number;
 }
@@ -47,7 +46,6 @@ export interface AuditEnv {
   AUDIT_DISPLAY_NAME?: string;
   AUDIT_ENABLED?: string;
   AUDIT_LOG_READS?: string;
-  AUDIT_RETENTION_DAYS?: string;
   AUDIT_MAX_FIELD_CHARS?: string;
 }
 
@@ -65,7 +63,6 @@ export function auditSettingsFromEnv(env: AuditEnv): AuditSettings {
     displayName: env.AUDIT_DISPLAY_NAME?.trim() || 'BookStack',
     enabled: env.AUDIT_ENABLED !== 'false',
     logReads: env.AUDIT_LOG_READS !== 'false',
-    retentionDays: intSetting(env.AUDIT_RETENTION_DAYS, 365, 1, 3650),
     maxFieldChars: intSetting(env.AUDIT_MAX_FIELD_CHARS, 8_000, 500, 200_000),
   };
 }
@@ -390,50 +387,10 @@ export function instanceManifest(
       logs_tool_calls: true,
       logs_reads: settings.logReads,
       logs_auth_events: true,
-      retention_days: settings.retentionDays,
       max_field_chars: settings.maxFieldChars,
       redacts: ['secret-like argument keys', 'file/image upload payloads', 'bearer token signature'],
       unused_columns: ['sudo', 'upid', 'actor_label'],
     },
     tools,
   };
-}
-
-// --- Retention --------------------------------------------------------------------
-
-const SWEEP_BATCH = 5_000;
-const SWEEP_MAX_BATCHES = 20;
-
-export interface SweepResult {
-  cutoff: number;
-  tool_calls: number;
-  auth_events: number;
-  incomplete: boolean;
-}
-
-/** Deletes rows older than the retention window, in bounded chunks so no statement times out. */
-export async function sweepAuditLog(db: D1Database, settings: AuditSettings): Promise<SweepResult> {
-  const cutoff = Date.now() - settings.retentionDays * 86_400_000;
-  const result: SweepResult = { cutoff, tool_calls: 0, auth_events: 0, incomplete: false };
-  const t = tablesFor(settings.instanceId);
-
-  for (const [key, table] of [['tool_calls', t.toolCalls], ['auth_events', t.authEvents]] as const) {
-    let batches = 0;
-    for (;;) {
-      const deleted = await db
-        .prepare(
-          `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ts < ?1 LIMIT ${SWEEP_BATCH})`,
-        )
-        .bind(cutoff)
-        .run();
-      const changes = deleted.meta?.changes ?? 0;
-      result[key] += changes;
-      if (changes < SWEEP_BATCH) break;
-      if (++batches >= SWEEP_MAX_BATCHES) {
-        result.incomplete = true;
-        break;
-      }
-    }
-  }
-  return result;
 }

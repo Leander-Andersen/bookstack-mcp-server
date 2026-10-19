@@ -7,7 +7,7 @@ try {
   DatabaseSync = undefined;
 }
 const describeDb = DatabaseSync ? describe : describe.skip;
-import { Auditor, auditSettingsFromEnv, describeTarget, isMutating, redact, sweepAuditLog, toolPhrasing } from '../../src/audit/auditor';
+import { Auditor, auditSettingsFromEnv, describeTarget, isMutating, redact, toolPhrasing } from '../../src/audit/auditor';
 import { ensureSchema, InstanceConflictError, resetSchemaMemo, tablesFor } from '../../src/audit/migrate';
 import { McpAuditTools } from '../../src/tools/mcp-audit';
 
@@ -69,7 +69,7 @@ describeDb('MCP audit log', () => {
 
     const reg = db.sqlite.prepare("SELECT * FROM audit_instances WHERE instance_id = 'bookstack'").get();
     expect(reg).toMatchObject({ server: 'bookstack-mcp-server', tool_calls_table: 'bookstack_tool_calls', auth_events_table: 'bookstack_auth_events' });
-    expect(JSON.parse(reg.settings_json)).toMatchObject({ logs_reads: true, retention_days: 365 });
+    expect(JSON.parse(reg.settings_json)).toMatchObject({ logs_reads: true, max_field_chars: 8_000 });
   });
 
   it('skips reads when AUDIT_LOG_READS=false but still logs mutations', async () => {
@@ -154,16 +154,6 @@ describeDb('MCP audit log', () => {
     await ctx.flush();
     const tables = db.sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'bookstack_tool_calls'").all();
     expect(tables).toHaveLength(0);
-  });
-
-  it('sweeps rows past retention', async () => {
-    const db = fakeD1();
-    await ensureSchema(db, T);
-    const old = Date.now() - 400 * 86_400_000;
-    db.sqlite.prepare("INSERT INTO bookstack_tool_calls (ts, request_id, tool, status) VALUES (?, 'r', 't', 'ok')").run(old);
-    db.sqlite.prepare("INSERT INTO bookstack_tool_calls (ts, request_id, tool, status) VALUES (?, 'r', 't', 'ok')").run(Date.now());
-    const result = await sweepAuditLog(db, auditSettingsFromEnv({}));
-    expect(result.tool_calls).toBe(1);
   });
 
   it('query tool filters and handles an empty database', async () => {
