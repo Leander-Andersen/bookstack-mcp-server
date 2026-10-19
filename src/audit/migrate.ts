@@ -16,7 +16,7 @@
  *
  * The registry is the one shared table, and it is deliberately tiny and
  * generic. Each instance upserts only its own row, which tells a viewer
- * (Hindsight) where that instance's tables are, what it logs (settings_json)
+ * (ULV) where that instance's tables are, what it logs (settings_json)
  * and what each of its tools means (tools_json) -- so a viewer can display an
  * instance it has never heard of without code changes.
  *

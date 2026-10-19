@@ -38,11 +38,13 @@ export interface WorkerEnv {
   DIAGNOSTIC_LOG_ENABLED?: string;
 
   /**
-   * MCP audit log — the D1 database shared by all MCP servers' audit logs
-   * (see src/audit/migrate.ts). This server writes only its own prefixed
-   * tables (<AUDIT_INSTANCE_ID>_tool_calls / _auth_events) plus its own row in
-   * the shared audit_instances registry. Optional — when unbound, nothing is
-   * logged and the server works as before.
+   * MCP audit log — the unified-logging-and-visualisation (ULV) D1 database,
+   * shared by all MCP servers' audit logs (see src/audit/migrate.ts). This
+   * server writes only its own prefixed tables (<AUDIT_INSTANCE_ID>_tool_calls
+   * / _auth_events) plus its own row in the shared audit_instances registry;
+   * ULV discovers it from that row, imports its tables, and prunes imported
+   * rows older than 30 days. Optional — when unbound, nothing is logged and
+   * the server works as before.
    */
   AUDIT_DB?: D1Database;
 
@@ -55,8 +57,6 @@ export interface WorkerEnv {
   AUDIT_ENABLED?: string;
   /** "false" records only mutations (create/update/delete/restore). Default: log reads too. */
   AUDIT_LOG_READS?: string;
-  /** Days of history the nightly sweep keeps. Default 365. */
-  AUDIT_RETENTION_DAYS?: string;
   /** Per-field character cap on stored arguments/results/errors. Default 8000. */
   AUDIT_MAX_FIELD_CHARS?: string;
 }

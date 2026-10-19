@@ -16,8 +16,8 @@ import {
   validateAccessToken,
   isAllowedRedirectUri,
 } from './utils/oauth';
-import { Auditor, actorFromRequest, actorFromToken, auditSettingsFromEnv, instanceManifest, sweepAuditLog } from './audit/auditor';
-import { SCHEMA_VERSION, ensureSchemaOnce, tablesFor } from './audit/migrate';
+import { Auditor, actorFromRequest, actorFromToken, auditSettingsFromEnv } from './audit/auditor';
+import { SCHEMA_VERSION, tablesFor } from './audit/migrate';
 
 // Version is sourced from package.json — single source of truth.
 // Update package.json's "version" field; everything else (this constant,
@@ -473,34 +473,5 @@ export default {
       });
       return new Response('Internal Server Error', { status: 500 });
     }
-  },
-
-  /**
-   * Nightly audit-log maintenance: applies any pending schema migration (the
-   * lazy path only runs when something is logged) and deletes rows older than
-   * AUDIT_RETENTION_DAYS.
-   */
-  async scheduled(_event: ScheduledController, env: WorkerEnv, ctx: ExecutionContext): Promise<void> {
-    const db = env.AUDIT_DB;
-    if (!db) return;
-    const settings = auditSettingsFromEnv(env);
-    ctx.waitUntil(
-      (async () => {
-        // No tool list here (no MCP server is built for a cron run), so the
-        // registry keeps the tools_json written by the last request.
-        const schema = await ensureSchemaOnce(db, tablesFor(settings.instanceId), () =>
-          instanceManifest(settings),
-        );
-        if (schema.applied.length) {
-          console.log(`audit schema: applied migrations ${schema.applied.join(', ')}`);
-        }
-        const swept = await sweepAuditLog(db, settings);
-        console.log(
-          `audit sweep: removed ${swept.tool_calls} tool calls and ${swept.auth_events} auth events ` +
-            `older than ${new Date(swept.cutoff).toISOString()} (retention ${settings.retentionDays}d)` +
-            (swept.incomplete ? ' -- hit the per-run batch limit, continuing tomorrow' : ''),
-        );
-      })(),
-    );
   },
 };
