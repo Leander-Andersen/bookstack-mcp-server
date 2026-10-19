@@ -16,6 +16,8 @@ import {
   validateAccessToken,
   isAllowedRedirectUri,
 } from './utils/oauth';
+import { Auditor, actorFromRequest, actorFromToken, auditSettingsFromEnv } from './audit/auditor';
+import { SCHEMA_VERSION, tablesFor } from './audit/migrate';
 
 // Version is sourced from package.json — single source of truth.
 // Update package.json's "version" field; everything else (this constant,
@@ -122,15 +124,30 @@ function constantTimeEq(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const baseUrl = `${url.protocol}//${url.host}`;
+
+    // MCP audit log (AUDIT_DB, shared; this instance writes only its own tables). A no-op when the binding is absent.
+    const auditSettings = auditSettingsFromEnv(env);
+    const audit = new Auditor(
+      env.AUDIT_DB,
+      ctx,
+      actorFromRequest(request, crypto.randomUUID()),
+      auditSettings,
+    );
 
     // ── Public routes (no auth) ─────────────────────────────────────────────
 
     // Health check
     if (url.pathname === '/health' && request.method === 'GET') {
-      return json({ status: 'ok' });
+      return json({
+        status: 'ok',
+        audit_configured: Boolean(env.AUDIT_DB),
+        audit_enabled: Boolean(env.AUDIT_DB) && auditSettings.enabled,
+        audit_schema_version: SCHEMA_VERSION,
+        audit_instance: auditSettings.instanceId,
+      });
     }
 
     // Diagnostic endpoint — returns recent OAuth events from KV.
@@ -189,6 +206,7 @@ export default {
         // Reject untrusted redirect targets BEFORE showing the password form.
         if (!isAllowedRedirectUri(redirectUri)) {
           await recordOAuthEvent(env, 'authorize_get_rejected', { reason: 'redirect_uri_not_allowed', redirectUri });
+          audit.authEvent('authorize_rejected', { clientId, detail: `redirect_uri not allowed: ${redirectUri}` });
           return json({
             error: 'invalid_request',
             error_description: 'redirect_uri is not on the allow-list (claude.ai / claude.com only)',
@@ -209,6 +227,7 @@ export default {
         // Re-check on POST — a malicious page could craft a form that bypasses
         // the GET check by submitting directly with its own redirect_uri.
         if (!isAllowedRedirectUri(redirectUri)) {
+          audit.authEvent('authorize_rejected', { clientId, detail: `redirect_uri not allowed: ${redirectUri}` });
           return json({ error: 'invalid_request', error_description: 'redirect_uri not allowed' }, 400);
         }
 
@@ -222,6 +241,7 @@ export default {
 
         if (diff !== 0) {
           await recordOAuthEvent(env, 'authorize_post_bad_password', { clientId, redirectUri });
+          audit.authEvent('authorize_fail', { clientId, detail: 'wrong password' });
           return html(authorizePage({ redirectUri, state, codeChallenge, clientId, error: true }));
         }
 
@@ -233,6 +253,7 @@ export default {
           clientId, redirectUri, codeNonce,
           hasCodeChallenge: !!codeChallenge,
         });
+        audit.authEvent('authorize_ok', { clientId, detail: `redirect_uri=${redirectUri}` });
         const redirect = new URL(redirectUri);
         redirect.searchParams.set('code', code);
         redirect.searchParams.set('state', state);
@@ -277,6 +298,7 @@ export default {
 
       if (grantType !== 'authorization_code') {
         await recordOAuthEvent(env, 'token_rejected', { reason: 'unsupported_grant_type', grantType });
+        audit.authEvent('token_denied', { clientId, detail: `unsupported grant_type: ${grantType}` });
         return json({ error: 'unsupported_grant_type' }, 400);
       }
 
@@ -289,6 +311,7 @@ export default {
           redirectUri,
           codeNonce,
         });
+        audit.authEvent('token_denied', { clientId, detail: result.reason });
         return json({ error: 'invalid_grant', error_description: `Invalid or expired authorization code (${result.reason})` }, 400);
       }
 
@@ -299,6 +322,7 @@ export default {
         const already = await env.BOOKSTACK_KV.get(consumedKey);
         if (already) {
           await recordOAuthEvent(env, 'token_rejected', { reason: 'code_already_used', codeNonce: result.nonce });
+          audit.authEvent('token_replay', { clientId, detail: 'authorization code already used' });
           return json({ error: 'invalid_grant', error_description: 'Authorization code already used' }, 400);
         }
         await env.BOOKSTACK_KV.put(consumedKey, '1', { expirationTtl: 300 });
@@ -307,6 +331,12 @@ export default {
       await recordOAuthEvent(env, 'token_issued', { codeNonce: result.nonce, redirectUri, clientId });
 
       const accessToken = await generateAccessToken(apiKey);
+      // token_nonce here is what gives actor_nonce on tool_calls rows a meaning.
+      audit.authEvent('token_issued', {
+        clientId,
+        tokenNonce: actorFromToken(accessToken).nonce,
+        detail: `redirect_uri=${redirectUri}`,
+      });
       return json({
         access_token: accessToken,
         token_type: 'Bearer',
@@ -326,6 +356,7 @@ export default {
         path: url.pathname,
         method: request.method,
       });
+      audit.authEvent('access_denied', { detail: `no bearer token on ${url.pathname}` });
       return new Response('Unauthorized', {
         status: 401,
         headers: { 'WWW-Authenticate': 'Bearer realm="BookStack MCP"', ...VERSION_HEADER },
@@ -341,6 +372,10 @@ export default {
         method: request.method,
         tokenPreview: token.slice(0, 8) + '...' + token.slice(-4),
         tokenLen: token.length,
+      });
+      audit.authEvent('access_denied', {
+        tokenNonce: actorFromToken(token).nonce,
+        detail: `rejected token on ${url.pathname}`,
       });
       return new Response('Unauthorized', {
         status: 401,
@@ -382,7 +417,17 @@ export default {
     const config = buildConfigFromEnv(env);
 
     try {
-      const mcpServer = new BookStackMCPServer(config);
+      let auditTables;
+      try {
+        auditTables = tablesFor(auditSettings.instanceId);
+      } catch (e) {
+        console.error(`audit: ${(e as Error).message}`);
+      }
+      const mcpServer = new BookStackMCPServer(config, {
+        auditor: audit,
+        db: env.AUDIT_DB,
+        tables: auditTables,
+      });
 
       // Stateless mode — no sessionIdGenerator. Web Standard transport accepts
       // optional sessionIdGenerator and treats its absence as stateless mode.

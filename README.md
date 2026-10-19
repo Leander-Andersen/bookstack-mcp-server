@@ -157,6 +157,54 @@ The token is sent to BookStack as `Authorization: Token abc123:xyz789secret`.
 
 **Pagination** — `fetchAll()` fetches the first page (500 items), reads the `total` field, then fires all remaining pages in parallel.
 
+### MCP audit log (optional, shared D1)
+
+Every tool call made through this server — arguments, result, duration, outcome
+and the token that asked — plus every OAuth event is written to a Cloudflare D1
+database. This is separate from `bookstack_audit_log_list`, which reads
+BookStack's own activity log.
+
+**One database, many servers.** To stay within Workers Free, all MCP servers log
+into the same D1 (`AUDIT_DB`, the unified-logging-and-visualisation, or ULV,
+database). They do not share a schema: each instance has its own prefixed
+tables and migration ledger, and never reads or writes another's.
+
+| Table | Owner | Contents |
+|---|---|---|
+| `audit_instances` | shared registry, one row per instance | where the instance's tables are, `settings_json` (what it logs: reads or not, redaction, unused columns), `tools_json` (label, description, mutating flag for every tool) |
+| `<id>_tool_calls` | this instance | one row per tool call |
+| `<id>_auth_events` | this instance | authorize / token / access-denied events |
+| `<id>_schema_migrations` | this instance | migration ledger |
+
+`<id>` is `AUDIT_INSTANCE_ID` (default `bookstack`). A second BookStack
+deployment logging into the same database just needs a different id. Each
+instance can only update its own registry row; reusing an id another server
+registered makes audit writes fail with an error instead of mixing data.
+
+ULV discovers instances by reading `audit_instances` and then imports the
+tables each row names. The per-instance tables have the same columns as
+proxmox-mcp-server's `tool_calls` / `auth_events`, so they render the same way.
+
+Setup: the `[[d1_databases]]` block in `wrangler.toml` already points at the
+shared database; deploy and `/health` reports `"audit_configured": true` and
+`"audit_instance": "bookstack"`. The `bookstack_mcp_audit_log` tool queries this
+instance's rows.
+
+Optional vars: `AUDIT_INSTANCE_ID`, `AUDIT_DISPLAY_NAME`, `AUDIT_ENABLED`
+(`"false"` to stop), `AUDIT_LOG_READS` (`"false"` = mutations only),
+`AUDIT_MAX_FIELD_CHARS` (default 8000). Secret-looking argument keys are
+redacted and upload blobs (`file`, `image`) are dropped; only the bearer
+token's nonce is stored, never the token.
+
+#### Audit log → unified log (ULV)
+
+This server no longer sweeps its own audit tables: `AUDIT_DB` points at ULV's
+D1 (`unified-logs`), ULV discovers this server from its `audit_instances` row,
+imports `<id>_tool_calls` / `<id>_auth_events`, and prunes imported rows older
+than 30 days. There is no cron trigger here — Workers Free only allows five,
+and the account's five are already spoken for by other projects — so retention
+is entirely ULV's job. `AUDIT_RETENTION_DAYS` and the nightly sweep are gone.
+
 ### Deploying updates
 
 Push to `main`. Cloudflare's GitHub integration deploys automatically — no manual `wrangler deploy` needed. The `X-MCP-Server-Version` response header shows which version is live.

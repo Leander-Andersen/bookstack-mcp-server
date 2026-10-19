@@ -1,3 +1,4 @@
+/// <reference types="@cloudflare/workers-types" />
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
@@ -32,6 +33,9 @@ import { ShelfResources } from './resources/shelves';
 import { UserResources } from './resources/users';
 import { SearchResources } from './resources/search';
 import { MCPTool, MCPResource } from './types';
+import { isMutating, toolPhrasing, type Auditor } from './audit/auditor';
+import { McpAuditTools } from './tools/mcp-audit';
+import type { AuditTables } from './audit/migrate';
 
 const UNTRUSTED_PREFIX =
   '<bookstack-untrusted-data>\n' +
@@ -88,8 +92,21 @@ export class BookStackMCPServer {
   private validator: ValidationHandler;
   private tools: Map<string, MCPTool> = new Map();
   private resources: Map<string, MCPResource> = new Map();
+  private auditor: Auditor | undefined;
+  private auditDb: D1Database | undefined;
+  private auditTables: AuditTables | undefined;
 
-  constructor(configOverrides?: Partial<Config>) {
+  /**
+   * @param audit Optional MCP audit logging (Worker only). `auditor` records
+   *   every tool call; `db` additionally registers bookstack_mcp_audit_log so
+   *   the log can be queried, scoped to `tables` (this instance's tables in
+   *   the shared AUDIT_DB).
+   */
+  constructor(configOverrides?: Partial<Config>, audit?: { auditor?: Auditor | undefined; db?: D1Database | undefined; tables?: AuditTables | undefined }) {
+    this.auditor = audit?.auditor;
+    this.auditDb = audit?.db;
+    this.auditTables = audit?.tables;
+
     // On Cloudflare Workers the caller (worker.ts) supplies a fully-built
     // Config from buildConfigFromEnv(env). process.env has no BOOKSTACK_*
     // values there, so calling ConfigManager.getInstance() would throw on
@@ -168,6 +185,7 @@ export class BookStackMCPServer {
       new AuditTools(this.client, this.validator, this.logger),
       new SystemTools(this.client, this.validator, this.logger),
       new ServerInfoTools(this.logger, this.tools, this.resources),
+      ...(this.auditDb && this.auditTables ? [new McpAuditTools(this.auditDb, this.auditTables)] : []),
     ];
 
     // Register all tools
@@ -178,6 +196,19 @@ export class BookStackMCPServer {
     });
 
     this.logger.info(`Registered ${this.tools.size} tools`);
+
+    // Publish what each tool means to the audit registry, so a log viewer can
+    // label rows from this server without knowing anything about BookStack.
+    this.auditor?.setTools(
+      Array.from(this.tools.values()).map((tool) => ({
+        name: tool.name,
+        title: tool.name.replace(/^bookstack_/, '').replace(/_/g, ' '),
+        description: tool.description.split('\n')[0].slice(0, 300),
+        category: tool.category,
+        mutating: isMutating(tool.name),
+        ...toolPhrasing(tool.name),
+      })),
+    );
   }
 
   /**
@@ -243,11 +274,14 @@ export class BookStackMCPServer {
 
       const tool = this.tools.get(name);
       if (!tool) {
+        this.auditor?.toolCall({ tool: name, args, rejected: `Unknown tool: ${name}`, durationMs: 0 });
         throw new Error(`Unknown tool: ${name}`);
       }
 
+      const started = Date.now();
       try {
         const result = await tool.handler(args || {});
+        this.auditor?.toolCall({ tool: name, args, result, durationMs: Date.now() - started });
         this.logger.info(`Tool ${name} completed successfully`);
         return {
           content: [{
@@ -256,6 +290,7 @@ export class BookStackMCPServer {
           }],
         };
       } catch (error) {
+        this.auditor?.toolCall({ tool: name, args, error, durationMs: Date.now() - started });
         this.logger.error(`Tool ${name} failed`, { error: (error as Error).message, stack: (error as Error).stack });
         throw this.errorHandler.handleError(error);
       }
