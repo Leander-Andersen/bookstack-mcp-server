@@ -535,7 +535,11 @@ export interface ResourceExample {
 export type ExportFormat = 'html' | 'pdf' | 'plaintext' | 'markdown';
 
 export interface ExportResult {
+  /** Text formats as-is (encoding "utf8"); binary formats such as PDF base64-encoded (encoding "base64"). */
   content: string;
+  encoding: 'utf8' | 'base64';
+  /** Size of the exported file in bytes (content.length counts characters, not bytes). */
+  byte_length: number;
   filename: string;
   mime_type: string;
 }

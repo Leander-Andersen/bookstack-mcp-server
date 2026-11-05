@@ -374,7 +374,7 @@ export class BookTools {
   private createExportBookTool(): MCPTool {
     return {
       name: 'bookstack_books_export',
-      description: 'Export a book to a specific format. Useful for backups, offline reading, or migrating content.',
+      description: 'Export a book to a specific format. Useful for backups, offline reading, or migrating content. Returns { content, encoding, byte_length, filename, mime_type }: PDF arrives base64-encoded (encoding "base64"), text formats as-is (encoding "utf8").',
       inputSchema: {
         type: 'object',
         required: ['id', 'format'],

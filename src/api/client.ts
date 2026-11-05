@@ -56,6 +56,14 @@ import {
   PaginationParams,
 } from '../types';
 
+// Retry policy: see BookStackClient.fetchWithRetry.
+const RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 4_000;
+const RETRY_MAX_TOTAL_WAIT_MS = 10_000;
+const RETRYABLE_STATUSES = [502, 503, 504];
+const REPLAY_SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+
 /**
  * BookStack API Client
  *
@@ -83,6 +91,69 @@ export class BookStackClient implements BookStackAPIClient {
       baseUrl: config.bookstack.baseUrl,
       timeout: config.bookstack.timeout,
     });
+  }
+
+  /**
+   * Wait helper, split out so tests can stub it.
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Compute the wait before retry `attempt` (1-based). A server-directed
+   * Retry-After (seconds) wins; otherwise exponential backoff with jitter.
+   */
+  private retryDelayMs(response: Response | undefined, attempt: number): number {
+    const header = response?.headers.get('Retry-After');
+    if (header) {
+      const seconds = Number(header);
+      if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000) + 250;
+    }
+    const exp = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+    return Math.round(exp * (1 + Math.random() * 0.25));
+  }
+
+  /**
+   * fetch with bounded retries. Only replayable requests are retried:
+   *  - 429 is retried for every method (the throttle rejects before the route runs);
+   *  - 502/503/504 and network failures are retried only for GET/HEAD/OPTIONS,
+   *    since a write may already have been applied.
+   * Retry waits are capped in total so a Worker request never sleeps for long.
+   * Returns the final response (which may be a non-OK one); network errors that
+   * survive all attempts are thrown through the error handler.
+   */
+  private async fetchWithRetry(url: string, init: RequestInit, method: string): Promise<Response> {
+    const safe = REPLAY_SAFE_METHODS.includes(method.toUpperCase());
+    let waited = 0;
+    for (let attempt = 1; ; attempt++) {
+      let response: Response | undefined;
+      let networkError: unknown;
+      try {
+        response = await fetch(url, { ...init, signal: AbortSignal.timeout(this.config.bookstack.timeout) });
+      } catch (error) {
+        networkError = error;
+      }
+
+      const retryable = response
+        ? response.status === 429 || (safe && RETRYABLE_STATUSES.includes(response.status))
+        : safe;
+
+      if (retryable && attempt < RETRY_MAX_ATTEMPTS) {
+        const delay = this.retryDelayMs(response, attempt);
+        if (waited + delay <= RETRY_MAX_TOTAL_WAIT_MS) {
+          this.logger.debug('Retrying request', { method, url, attempt, status: response?.status, delayMs: delay });
+          await response?.body?.cancel().catch(() => undefined);
+          waited += delay;
+          await this.sleep(delay);
+          continue;
+        }
+      }
+
+      if (response) return response;
+      this.logger.error('Fetch network error', { url, method, error: String(networkError) });
+      throw this.errorHandler.handleError(networkError);
+    }
   }
 
   /**
@@ -123,20 +194,13 @@ export class BookStackClient implements BookStackAPIClient {
     const init: RequestInit = {
       method,
       headers: this.baseHeaders,
-      signal: AbortSignal.timeout(this.config.bookstack.timeout),
     };
 
     if (data !== undefined) {
       init.body = JSON.stringify(data);
     }
 
-    let response: Response;
-    try {
-      response = await fetch(url, init);
-    } catch (error) {
-      this.logger.error('Fetch network error', { url, method, error: String(error) });
-      throw this.errorHandler.handleError(error);
-    }
+    const response = await this.fetchWithRetry(url, init, method);
 
     this.logger.debug('API response', { status: response.status, url });
 
@@ -272,33 +336,47 @@ export class BookStackClient implements BookStackAPIClient {
 
     this.logger.debug('API export request', { method, url });
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method,
-        headers: this.baseHeaders,
-        signal: AbortSignal.timeout(this.config.bookstack.timeout),
-      });
-    } catch (error) {
-      this.logger.error('Fetch network error', { url, method, error: String(error) });
-      throw this.errorHandler.handleError(error);
-    }
+    const response = await this.fetchWithRetry(
+      url,
+      { method, headers: this.baseHeaders },
+      method
+    );
 
     if (!response.ok) {
       const body = await response.text();
       throw this.errorHandler.handleFetchError(response.status, url, method, body);
     }
 
-    const content = await response.text();
     const mimeType = response.headers.get('content-type') ?? 'application/octet-stream';
     const parts = path.split('/');
     const format = parts[parts.length - 1];
 
+    // Read bytes, never text(): decoding a PDF as UTF-8 replaces invalid
+    // sequences with U+FFFD and corrupts the file. Binary formats are returned
+    // base64-encoded; text formats are decoded as UTF-8.
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const isText = format !== 'pdf' && /^(text\/|application\/(json|xml|xhtml))/i.test(mimeType);
+    const extension = format === 'plaintext' ? 'txt' : format === 'markdown' ? 'md' : format;
+
     return {
-      content,
-      filename: `export.${format}`,
+      content: isText ? new TextDecoder('utf-8').decode(bytes) : this.encodeBase64(bytes),
+      encoding: isText ? 'utf8' : 'base64',
+      byte_length: bytes.length,
+      filename: `export.${extension}`,
       mime_type: mimeType,
     };
+  }
+
+  /**
+   * Encode bytes as base64 (chunked so large PDFs do not overflow the call stack).
+   */
+  private encodeBase64(bytes: Uint8Array): string {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
   }
 
   /**

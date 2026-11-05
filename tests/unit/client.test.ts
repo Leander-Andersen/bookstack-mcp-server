@@ -47,3 +47,104 @@ describe('BookStackClient filter serialisation', () => {
     expect(url).toContain('filter[book_id]=5');
   });
 });
+
+describe('BookStackClient retry', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    (global as any).fetch = realFetch;
+    jest.restoreAllMocks();
+  });
+
+  const ok = () => new Response(JSON.stringify({ data: [], total: 0 }), { status: 200 });
+
+  function clientWithoutSleep() {
+    const c = makeClient();
+    const sleep = jest.spyOn(c as any, 'sleep').mockResolvedValue(undefined);
+    return { c, sleep };
+  }
+
+  it('retries a GET after 503 and then succeeds', async () => {
+    const f = jest.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(ok());
+    (global as any).fetch = f;
+    const { c, sleep } = clientWithoutSleep();
+    await expect(c.listBooks()).resolves.toEqual({ data: [], total: 0 });
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours Retry-After on 429', async () => {
+    const f = jest.fn()
+      .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '2' } }))
+      .mockResolvedValueOnce(ok());
+    (global as any).fetch = f;
+    const { c, sleep } = clientWithoutSleep();
+    await c.listBooks();
+    expect(sleep).toHaveBeenCalledWith(2250);
+  });
+
+  it('does not replay a POST after 503', async () => {
+    const f = jest.fn().mockResolvedValue(new Response('{}', { status: 503 }));
+    (global as any).fetch = f;
+    const { c } = clientWithoutSleep();
+    await expect(c.createBook({ name: 'x' } as any)).rejects.toBeDefined();
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays a POST after 429 (rejected before the route ran)', async () => {
+    const f = jest.fn()
+      .mockResolvedValueOnce(new Response('', { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 1 }), { status: 200 }));
+    (global as any).fetch = f;
+    const { c } = clientWithoutSleep();
+    await expect(c.createBook({ name: 'x' } as any)).resolves.toEqual({ id: 1 });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after the attempt limit', async () => {
+    const f = jest.fn().mockImplementation(async () => new Response('{}', { status: 503 }));
+    (global as any).fetch = f;
+    const { c } = clientWithoutSleep();
+    await expect(c.listBooks()).rejects.toBeDefined();
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a 404', async () => {
+    const f = jest.fn().mockResolvedValue(new Response('{}', { status: 404 }));
+    (global as any).fetch = f;
+    const { c } = clientWithoutSleep();
+    await expect(c.listBooks()).rejects.toBeDefined();
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BookStackClient export', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    (global as any).fetch = realFetch;
+  });
+
+  it('returns PDF bytes intact as base64', async () => {
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28]);
+    (global as any).fetch = jest.fn().mockResolvedValue(
+      new Response(bytes, { status: 200, headers: { 'content-type': 'application/pdf' } })
+    );
+    const r = await makeClient().exportPage(1, 'pdf');
+    expect(r.encoding).toBe('base64');
+    expect(r.byte_length).toBe(bytes.length);
+    expect(Array.from(Buffer.from(r.content, 'base64'))).toEqual(Array.from(bytes));
+    expect(r.filename).toBe('export.pdf');
+  });
+
+  it('returns text formats as utf8', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue(
+      new Response('# Hei æøå', { status: 200, headers: { 'content-type': 'text/markdown; charset=utf-8' } })
+    );
+    const r = await makeClient().exportPage(1, 'markdown');
+    expect(r.encoding).toBe('utf8');
+    expect(r.content).toBe('# Hei æøå');
+    expect(r.byte_length).toBe(Buffer.byteLength('# Hei æøå'));
+    expect(r.filename).toBe('export.md');
+  });
+});

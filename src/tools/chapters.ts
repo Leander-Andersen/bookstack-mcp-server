@@ -379,7 +379,7 @@ export class ChapterTools {
   private createExportChapterTool(): MCPTool {
     return {
       name: 'bookstack_chapters_export',
-      description: 'Export a chapter to a specific format. Includes content from all pages in the chapter.',
+      description: 'Export a chapter to a specific format. Includes content from all pages in the chapter. Returns { content, encoding, byte_length, filename, mime_type }: PDF arrives base64-encoded (encoding "base64"), text formats as-is (encoding "utf8").',
       inputSchema: {
         type: 'object',
         required: ['id', 'format'],

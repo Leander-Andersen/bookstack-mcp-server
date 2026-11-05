@@ -399,7 +399,7 @@ export class PageTools {
   private createExportPageTool(): MCPTool {
     return {
       name: 'bookstack_pages_export',
-      description: 'Export a page to a specific format (HTML, PDF, Markdown, Plain Text).',
+      description: 'Export a page to a specific format (HTML, PDF, Markdown, Plain Text). Returns { content, encoding, byte_length, filename, mime_type }: text formats arrive as-is with encoding "utf8", while "pdf" arrives base64-encoded with encoding "base64".',
       inputSchema: {
         type: 'object',
         required: ['id', 'format'],
