@@ -177,6 +177,9 @@ describe('classification helpers', () => {
     expect(isMutating('bookstack_pages_create')).toBe(true);
     expect(isMutating('bookstack_recyclebin_delete_permanently')).toBe(true);
     expect(isMutating('bookstack_permissions_update')).toBe(true);
+    expect(isMutating('bookstack_pages_edit')).toBe(true);
+    expect(isMutating('bookstack_pages_append')).toBe(true);
+    expect(isMutating('bookstack_pages_outline')).toBe(false);
     expect(isMutating('bookstack_pages_export')).toBe(false);
     expect(isMutating('bookstack_search')).toBe(false);
   });
@@ -191,6 +194,9 @@ describe('classification helpers', () => {
   it('publishes phrasing for viewers', () => {
     expect(toolPhrasing('bookstack_pages_delete')).toEqual({ past: 'Deleted', infinitive: 'delete', object: 'a page' });
     expect(toolPhrasing('bookstack_books_list')).toMatchObject({ past: 'Listed', object: 'books' });
+    expect(toolPhrasing('bookstack_pages_edit')).toEqual({ past: 'Edited', infinitive: 'edit', object: 'a page' });
+    expect(toolPhrasing('bookstack_pages_append')).toEqual({ past: 'Appended to', infinitive: 'append to', object: 'a page' });
+    expect(toolPhrasing('bookstack_pages_outline')).toMatchObject({ past: 'Outlined' });
     expect(toolPhrasing('bookstack_help')).toEqual({});
   });
 

@@ -280,7 +280,7 @@ export class ServerInfoTools {
       {
         name: 'pages',
         description: 'Manage individual pages - the core content units',
-        tools: ['bookstack_pages_list', 'bookstack_pages_create', 'bookstack_pages_read', 'bookstack_pages_update', 'bookstack_pages_delete', 'bookstack_pages_export'],
+        tools: ['bookstack_pages_list', 'bookstack_pages_create', 'bookstack_pages_read', 'bookstack_pages_update', 'bookstack_pages_edit', 'bookstack_pages_append', 'bookstack_pages_outline', 'bookstack_pages_delete', 'bookstack_pages_export'],
         use_cases: ['Create articles and documentation', 'Update existing content', 'Manage page hierarchy'],
       },
       {

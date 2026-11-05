@@ -88,35 +88,73 @@ const ValidationSchemas = {
     priority: z.number().optional(),
   }),
 
+  // Page reads: every option beyond `id` is opt-in, so a bare { id } call is unchanged.
+  pageRead: z.object({
+    id: z.number().int().positive(),
+    // Literal search, capped so one result cannot smuggle a whole large page through.
+    grep: z.string().min(1).max(1000).optional(),
+    case_sensitive: z.boolean().default(false),
+    context: z.number().int().min(1).max(2000).default(200),
+    max_matches: z.number().int().min(1).max(50).default(10),
+    offset: z.number().int().min(0).optional(),
+    length: z.number().int().min(1).optional(),
+    metadata_only: z.boolean().default(false),
+  }),
+
+  // Literal find-and-replace. old_string is non-empty (an empty anchor matches nothing
+  // meaningful); new_string may be empty, which deletes the anchored text.
+  pageEdit: z.strictObject({
+    id: z.number().int().positive(),
+    edits: z.array(z.strictObject({
+      old_string: z.string().min(1),
+      new_string: z.string(),
+      replace_all: z.boolean().default(false),
+    })).min(1),
+    dry_run: z.boolean().default(false),
+    // Compared as a string against the page's current updated_at: never parsed or reformatted.
+    expected_updated_at: z.string().min(1).optional(),
+    allow_shrink: z.boolean().default(false),
+  }),
+
+  pageAppend: z.strictObject({
+    id: z.number().int().positive(),
+    content: z.string().min(1),
+    position: z.enum(['start', 'end']).default('end'),
+    section: z.string().min(1).optional(),
+    separator: z.string().optional(),
+    dry_run: z.boolean().default(false),
+    expected_updated_at: z.string().min(1).optional(),
+  }),
+
   // Chapters
-  chaptersList: z.object({
+  chaptersList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['name', 'created_at', 'updated_at', 'priority']).default('name'),
-    filter: z.object({
+    filter: z.strictObject({
       book_id: z.number().optional(),
       name: z.string().optional(),
     }).optional(),
   }),
 
-  chapterCreate: z.object({
+  chapterCreate: z.strictObject({
     name: z.string().min(1).max(255),
     book_id: z.number(),
     description: z.string().max(1900).optional(),
     description_html: z.string().max(2000).optional(),
-    tags: z.array(z.object({
+    tags: z.array(z.strictObject({
       name: z.string(),
       value: z.string(),
     })).optional(),
     priority: z.number().optional(),
   }),
 
-  chapterUpdate: z.object({
+  chapterUpdate: z.strictObject({
     name: z.string().min(1).max(255).optional(),
     book_id: z.number().optional(),
     description: z.string().max(1900).optional(),
     description_html: z.string().max(2000).optional(),
-    tags: z.array(z.object({
+    tags: z.array(z.strictObject({
       name: z.string(),
       value: z.string(),
     })).optional(),
@@ -124,32 +162,32 @@ const ValidationSchemas = {
   }),
 
   // Shelves
-  shelvesList: z.object({
+  shelvesList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['name', 'created_at', 'updated_at']).default('name'),
-    filter: z.object({
+    filter: z.strictObject({
       name: z.string().optional(),
       created_by: z.number().optional(),
     }).optional(),
   }),
 
-  shelfCreate: z.object({
+  shelfCreate: z.strictObject({
     name: z.string().min(1).max(255),
     description: z.string().max(1900).optional(),
     description_html: z.string().max(2000).optional(),
-    tags: z.array(z.object({
+    tags: z.array(z.strictObject({
       name: z.string(),
       value: z.string(),
     })).optional(),
     books: z.array(z.number()).optional(),
   }),
 
-  shelfUpdate: z.object({
+  shelfUpdate: z.strictObject({
     name: z.string().min(1).max(255).optional(),
     description: z.string().max(1900).optional(),
     description_html: z.string().max(2000).optional(),
-    tags: z.array(z.object({
+    tags: z.array(z.strictObject({
       name: z.string(),
       value: z.string(),
     })).optional(),
@@ -157,17 +195,17 @@ const ValidationSchemas = {
   }),
 
   // Users
-  usersList: z.object({
+  usersList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['name', 'email', 'created_at', 'updated_at']).default('name'),
-    filter: z.object({
+    filter: z.strictObject({
       name: z.string().optional(),
       email: z.string().optional(),
     }).optional(),
   }),
 
-  userCreate: z.object({
+  userCreate: z.strictObject({
     name: z.string().min(1).max(255),
     email: z.string().email().max(255),
     password: z.string().min(8).optional(),
@@ -175,7 +213,7 @@ const ValidationSchemas = {
     send_invite: z.boolean().optional(),
   }),
 
-  userUpdate: z.object({
+  userUpdate: z.strictObject({
     name: z.string().min(1).max(255).optional(),
     email: z.string().email().max(255).optional(),
     password: z.string().min(8).optional(),
@@ -183,13 +221,13 @@ const ValidationSchemas = {
   }),
 
   // Roles
-  rolesList: z.object({
+  rolesList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['display_name', 'created_at', 'updated_at']).default('display_name'),
   }),
 
-  roleCreate: z.object({
+  roleCreate: z.strictObject({
     display_name: z.string().min(1).max(255),
     description: z.string().max(1900).optional(),
     external_auth_id: z.string().optional(),
@@ -197,7 +235,7 @@ const ValidationSchemas = {
     mfa_enforced: z.boolean().optional(),
   }),
 
-  roleUpdate: z.object({
+  roleUpdate: z.strictObject({
     display_name: z.string().min(1).max(255).optional(),
     description: z.string().max(1900).optional(),
     external_auth_id: z.string().optional(),
@@ -206,18 +244,18 @@ const ValidationSchemas = {
   }),
 
   // Attachments
-  attachmentsList: z.object({
+  attachmentsList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['name', 'extension', 'uploaded_to', 'created_at', 'updated_at']).default('name'),
-    filter: z.object({
+    filter: z.strictObject({
       name: z.string().optional(),
       uploaded_to: z.number().optional(),
       extension: z.string().optional(),
     }).optional(),
   }),
 
-  attachmentCreate: z.object({
+  attachmentCreate: z.strictObject({
     uploaded_to: z.number(),
     name: z.string().min(1).max(255),
     file: z.string().optional(), // base64 encoded
@@ -226,7 +264,7 @@ const ValidationSchemas = {
     message: "Either file or link is required",
   }),
 
-  attachmentUpdate: z.object({
+  attachmentUpdate: z.strictObject({
     uploaded_to: z.number().optional(),
     name: z.string().min(1).max(255).optional(),
     file: z.string().optional(), // base64 encoded
@@ -234,40 +272,40 @@ const ValidationSchemas = {
   }),
 
   // Images
-  imagesList: z.object({
+  imagesList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['name', 'created_at', 'updated_at']).default('name'),
-    filter: z.object({
+    filter: z.strictObject({
       name: z.string().optional(),
       type: z.enum(['gallery', 'drawio']).optional(),
     }).optional(),
   }),
 
-  imageCreate: z.object({
+  imageCreate: z.strictObject({
     name: z.string().min(1).max(255),
     image: z.string(), // base64 encoded
     type: z.enum(['gallery', 'drawio']).default('gallery'),
   }),
 
-  imageUpdate: z.object({
+  imageUpdate: z.strictObject({
     name: z.string().min(1).max(255).optional(),
     image: z.string().optional(), // base64 encoded
   }),
 
   // Search
-  search: z.object({
+  search: z.strictObject({
     query: z.string().default(''),
     page: z.number().min(1).default(1),
     count: z.number().min(1).max(100).default(20),
   }),
 
   // Audit Log
-  auditLogList: z.object({
+  auditLogList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['created_at', 'type', 'user_id']).default('created_at'),
-    filter: z.object({
+    filter: z.strictObject({
       type: z.string().optional(),
       user_id: z.number().optional(),
       entity_type: z.string().optional(),
@@ -278,15 +316,15 @@ const ValidationSchemas = {
   }),
 
   // Content Permissions
-  contentPermissionsUpdate: z.object({
-    role_permissions: z.array(z.object({
+  contentPermissionsUpdate: z.strictObject({
+    role_permissions: z.array(z.strictObject({
       role_id: z.number(),
       view: z.boolean(),
       create: z.boolean(),
       update: z.boolean(),
       delete: z.boolean(),
     })).optional(),
-    fallback_permissions: z.object({
+    fallback_permissions: z.strictObject({
       inheriting: z.boolean(),
       view: z.boolean().optional(),
       create: z.boolean().optional(),
@@ -296,33 +334,37 @@ const ValidationSchemas = {
   }),
 
   // Export
-  export: z.object({
+  export: z.strictObject({
     id: z.number(),
     format: z.enum(['html', 'pdf', 'plaintext', 'markdown']),
   }),
 
   // Generic ID parameter
-  id: z.object({
+  id: z.strictObject({
     id: z.number().positive(),
   }),
 
   // Recycle bin operations
-  recycleBinList: z.object({
+  recycleBinList: z.strictObject({
     count: z.number().min(1).max(500).default(20),
     offset: z.number().min(0).default(0),
     sort: z.enum(['deleted_at', 'deletable_type', 'deletable_id']).default('deleted_at'),
   }),
 
-  recycleBinOperation: z.object({
+  recycleBinOperation: z.strictObject({
     deletion_id: z.number().positive(),
   }),
 
   // Content permissions
-  contentPermissions: z.object({
+  contentPermissions: z.strictObject({
     content_type: z.enum(['bookshelf', 'book', 'chapter', 'page']),
     content_id: z.number().positive(),
   }),
 };
+
+export type PageReadRequest = z.infer<typeof ValidationSchemas.pageRead>;
+export type PageEditRequest = z.infer<typeof ValidationSchemas.pageEdit>;
+export type PageAppendRequest = z.infer<typeof ValidationSchemas.pageAppend>;
 
 /**
  * Validation handler

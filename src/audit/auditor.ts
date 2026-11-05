@@ -145,7 +145,7 @@ export function cap(text: string, max: number): string {
 type Args = Record<string, unknown> | undefined;
 
 /** Tool-name suffixes that change something in BookStack. */
-const MUTATING_ACTION = /_(create|update|delete|restore|delete_permanently)$/;
+const MUTATING_ACTION = /_(create|update|edit|append|delete|restore|delete_permanently)$/;
 
 export function isMutating(tool: string): boolean {
   return MUTATING_ACTION.test(tool);
@@ -200,6 +200,9 @@ const VERBS: Record<string, [string, string]> = {
   read: ['Read', 'read'],
   create: ['Created', 'create'],
   update: ['Updated', 'update'],
+  edit: ['Edited', 'edit'],
+  append: ['Appended to', 'append to'],
+  outline: ['Outlined', 'outline'],
   delete: ['Deleted', 'delete'],
   delete_permanently: ['Permanently deleted', 'permanently delete'],
   restore: ['Restored', 'restore'],
