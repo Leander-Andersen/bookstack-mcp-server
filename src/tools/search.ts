@@ -22,6 +22,19 @@ function htmlToPlainText(html: string): string {
 }
 
 /**
+ * Build a BookStack tag search term. BookStack's tag syntax is `[name]` or
+ * `[name=value]`; `{tag:...}` is not a recognised filter and is silently
+ * dropped, which makes the query match everything. Brackets inside the name or
+ * value would end the term early, so they are stripped.
+ */
+export function buildTagTerm(name: string, value?: string): string {
+  const clean = (x: string) => x.replace(/[[\]]/g, '').trim();
+  const n = clean(name);
+  const v = value === undefined ? '' : clean(value);
+  return v ? `[${n}=${v}]` : `[${n}]`;
+}
+
+/**
  * Search tools for BookStack MCP Server
  *
  * Provides comprehensive search functionality across all content types
@@ -55,7 +68,7 @@ export class SearchTools {
           query: {
             type: 'string',
             default: '',
-            description: 'Search query string. Supports advanced syntax: "exact phrase", {type:page|book|chapter|shelf}, {tag:name=value}, {created_by:me}. Structured filters below are merged into this query automatically. Can be empty when using filters alone.',
+            description: 'Search query string. Supports advanced syntax: "exact phrase"; [tag] or [tag=value] for tags; {type:page|book|chapter|bookshelf} (combine types with |); {created_by:me} (also updated_by / owned_by); {in_name:text}; {in_body:text}. Negate an exact phrase, tag or filter with a leading "-". IMPORTANT: an unrecognised {filter:...} term (for example {tag:name=value}) is silently discarded by BookStack, which makes the query match everything - use [name=value] for tags. Structured filters below are merged into this query automatically. Can be empty when using filters alone.',
           },
           page: {
             type: 'integer',
@@ -131,7 +144,8 @@ export class SearchTools {
       usage_patterns: [
         'Use include_content:true to get full page text in one call instead of searching then reading.',
         'Use filters.type to restrict to a content type instead of embedding {type:page} in the query.',
-        'Use filters.tag to find content by tag without constructing {tag:name=value} syntax manually.',
+        'If a filtered query unexpectedly returns everything, suspect a mistyped filter: BookStack drops unknown {filter:...} terms silently instead of erroring.',
+        'Use filters.tag to find content by tag without constructing [name=value] syntax manually.',
       ],
       related_tools: ['bookstack_pages_read', 'bookstack_books_list'],
       error_codes: [
@@ -160,7 +174,7 @@ export class SearchTools {
         };
 
         // ── Tag-only fallback ────────────────────────────────────────────────
-        // BookStack's /search endpoint doesn't honor "{tag:Name}" when the query
+        // BookStack's /search endpoint doesn't honor "[Name]" when the query
         // string contains nothing else — it returns 0 results. When the caller
         // gave us no text query and only a tag filter (optionally narrowed by
         // type), fetch from the per-type list endpoints and filter client-side.
@@ -195,14 +209,15 @@ export class SearchTools {
         let finalQuery = textQuery;
 
         if (f.type) {
-          finalQuery += ` {type:${f.type}}`;
+          // BookStack's type filter calls shelves "bookshelf".
+          finalQuery += ` {type:${f.type === 'shelf' ? 'bookshelf' : f.type}}`;
         }
         if (f.tag) {
           const { name, value } = f.tag;
           if (name && value) {
-            finalQuery += ` {tag:${name}=${value}}`;
+            finalQuery += ` ${buildTagTerm(name, value)}`;
           } else if (name) {
-            finalQuery += ` {tag:${name}}`;
+            finalQuery += ` ${buildTagTerm(name)}`;
           }
         }
         if (f.owned_by)   finalQuery += ` {owned_by:${f.owned_by}}`;
@@ -260,7 +275,7 @@ export class SearchTools {
   /**
    * Fetch every item of a given entity type. Used by the tag-only search
    * fallback when BookStack's /search endpoint returns nothing for queries
-   * that consist solely of "{tag:...}".
+   * that consist solely of a tag term.
    */
   private async fetchAllForType(type: 'page' | 'book' | 'chapter' | 'bookshelf'): Promise<any[]> {
     switch (type) {

@@ -697,18 +697,17 @@ interface SearchResult {
 
 **Advanced Search Syntax:**
 - `"exact phrase"` - Exact phrase matching
-- `name:searchterm` - Field-specific search
-- `[book]` - Entity type filters
-- `tag:value` - Tag-based search
-- Boolean operators: AND, OR, NOT
+- `{in_name:term}` / `{in_body:term}` - Field-specific search
+- `{type:page}` - Entity type filter (`page`, `book`, `chapter`, `bookshelf`; combine with `|`)
+- `[tag]` / `[tag=value]` - Tag-based search
+- Unknown `{filter:...}` terms (e.g. `{tag:name=value}`) are silently dropped by BookStack and the query matches everything
 
 **Examples:**
 ```
 "API documentation"           // Exact phrase
-name:authentication          // Search in names only
-[page] authentication        // Pages containing authentication
-tag:category:api             // Content tagged as category:api
-authentication AND security  // Boolean search
+{in_name:authentication}     // Search in names only
+authentication {type:page}   // Pages containing authentication
+[category=api]               // Content tagged category=api
 ```
 
 ### Recycle Bin API
