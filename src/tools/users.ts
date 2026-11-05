@@ -1,3 +1,4 @@
+import { redactArgs } from '../utils/redact';
 import { BookStackClient } from '../api/client';
 import { ValidationHandler } from '../validation/validator';
 import { Logger } from '../utils/logger';
@@ -95,7 +96,7 @@ export class UserTools {
         }
       ],
       handler: async (params: any) => {
-        this.logger.debug('Listing users', params);
+        this.logger.debug('Listing users', redactArgs(params) as Record<string, unknown>);
         const validatedParams = this.validator.validateParams<any>(params, 'usersList');
         return await this.client.listUsers(validatedParams);
       },
@@ -167,7 +168,7 @@ export class UserTools {
         }
       ],
       handler: async (params: any) => {
-        this.logger.info('Creating user', { name: params.name, email: params.email });
+        this.logger.info('Creating user', { name: params.name });
         const validatedParams = this.validator.validateParams<any>(params, 'userCreate');
         return await this.client.createUser(validatedParams);
       },

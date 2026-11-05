@@ -14,6 +14,7 @@ import { ErrorHandler } from './utils/errors';
 import { ValidationHandler } from './validation/validator';
 import { BookTools } from './tools/books';
 import { PageTools } from './tools/pages';
+import { redactArgs } from './utils/redact';
 import { ChapterTools } from './tools/chapters';
 import { ShelfTools } from './tools/shelves';
 import { UserTools } from './tools/users';
@@ -54,23 +55,6 @@ function wrapUntrusted(text: string): string {
   return UNTRUSTED_PREFIX + text + UNTRUSTED_SUFFIX;
 }
 
-const SENSITIVE_ARG_KEYS = new Set(['password', 'file', 'image', 'token', 'api_token', 'apiToken']);
-
-function redactArgs(args: unknown): unknown {
-  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-    if (SENSITIVE_ARG_KEYS.has(k)) {
-      out[k] = typeof v === 'string' ? `[redacted ${v.length} chars]` : '[redacted]';
-    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
-      out[k] = redactArgs(v);
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
-}
-
 /**
  * BookStack MCP Server
  * 
@@ -78,7 +62,7 @@ function redactArgs(args: unknown): unknown {
  * through the Model Context Protocol (MCP).
  * 
  * Features:
- * - 47 tools covering all BookStack API endpoints
+ * - 59 tools covering all BookStack API endpoints
  * - Resource access for all content types
  * - Context7 integration for enhanced documentation
  * - Comprehensive error handling and validation
