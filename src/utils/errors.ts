@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { Logger } from './logger';
+import { PageContentError, PageStaleError } from './page-content';
 
 /**
  * Error handler for BookStack MCP Server
@@ -67,6 +68,25 @@ export class ErrorHandler {
   handleError(error: any): McpError {
     if (error instanceof McpError) {
       return error;
+    }
+
+    // Partial page editing: these carry actionable detail (the same text found
+    // with different whitespace, ambiguous matches, real section names) that the
+    // generic branch below would discard as an internal fault.
+    if (error instanceof PageContentError) {
+      return new McpError(ErrorCode.InvalidParams, error.message, {
+        type: 'page_content_error',
+        ...error.details,
+      });
+    }
+
+    // The page moved between the caller's read and this write: the arguments
+    // were fine, so InvalidRequest (re-read and retry), not InvalidParams.
+    if (error instanceof PageStaleError) {
+      return new McpError(ErrorCode.InvalidRequest, error.message, {
+        type: 'concurrent_modification',
+        ...error.details,
+      });
     }
 
     // Handle validation errors from Zod
