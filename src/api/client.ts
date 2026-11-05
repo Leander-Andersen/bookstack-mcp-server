@@ -104,7 +104,11 @@ export class BookStackClient implements BookStackAPIClient {
           // Use literal brackets (not %5B%5D) so BookStack/Laravel parses them correctly.
           for (const [subK, subV] of Object.entries(v as Record<string, unknown>)) {
             if (subV !== undefined && subV !== null) {
-              parts.push(`${k}[${subK}]=${encodeURIComponent(String(subV))}`);
+              // BookStack compares filter values against tinyint columns, and the
+              // string "true"/"false" coerces to 0 there, which returns the opposite
+              // rows. Send booleans as 1/0.
+              const wire = typeof subV === 'boolean' ? (subV ? '1' : '0') : String(subV);
+              parts.push(`${k}[${subK}]=${encodeURIComponent(wire)}`);
             }
           }
         } else {
