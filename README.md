@@ -2,7 +2,7 @@
 
 Connect your [BookStack](https://www.bookstackapp.com/) knowledge base to Claude via the Model Context Protocol (MCP). Runs as a Cloudflare Worker — no server to maintain, auto-deploys from GitHub on every push.
 
-**56 tools** covering every BookStack API endpoint: books, pages, chapters, shelves, users, roles, search, attachments, images, permissions, recycle bin, audit log, and system info.
+**59 tools** covering every BookStack API endpoint: books, pages, chapters, shelves, users, roles, search, attachments, images, permissions, recycle bin, audit log, and system info.
 
 ---
 
@@ -151,9 +151,15 @@ The token is sent to BookStack as `Authorization: Token abc123:xyz789secret`.
 
 **Audit log date filtering** — BookStack's `/api/audit-log` endpoint does not support date range filtering via query params. When `date_from` or `date_to` is specified, the worker fetches all matching entries via paginated `fetchAll()` and filters by `created_at` client-side.
 
-**Tag-only search** — BookStack's search API supports filter-only queries such as `{tag:name=value}` without a text term. Empty-query tag searches build the query from filter operators alone.
+**Tag search** — BookStack's tag syntax is `[name]` / `[name=value]`. An unrecognised `{filter:...}` term such as `{tag:name=value}` is silently dropped, which makes the query match everything. Empty-query tag searches are answered from the list endpoints and filtered locally.
 
 **Partial name matching** — BookStack's `filter[name]` only supports exact matches. The `bookstack_books_list` and `bookstack_shelves_list` tools use `fetchAll()` to retrieve all items and apply a case-insensitive `includes()` match locally.
+
+**Partial page editing** — BookStack can only replace a page's whole content, so `bookstack_pages_edit`, `bookstack_pages_append` and `bookstack_pages_outline` run the read-modify-write cycle in the worker and the caller sends only the changed fragment. `bookstack_pages_read` also accepts opt-in `grep`, `case_sensitive`, `context`, `max_matches`, `offset`, `length` and `metadata_only` options; without them it returns the full page object exactly as before. Markdown pages are patched and written through `markdown`; every other page is patched against `raw_html` (the stored source), never the rendered `html`, so page includes survive. Edits take literal `old_string`/`new_string` pairs that must match exactly once (or set `replace_all`), support `dry_run` and a best-effort `expected_updated_at` stale check, and refuse a result smaller than half the original unless `allow_shrink` is set. Writes are re-read and verified against the stored text.
+
+**Exports** — `*_export` tools return `{ content, encoding, byte_length, filename, mime_type }`. Text formats are `utf8`; PDF is returned base64-encoded (`encoding: "base64"`) so the bytes are intact.
+
+**Retries** — The API client retries 429 responses for any method, and 502/503/504 or network failures for GET/HEAD/OPTIONS only (up to 3 attempts, honouring `Retry-After`, with a 10 s wait budget). Writes are never replayed after a possible partial success.
 
 **Pagination** — `fetchAll()` fetches the first page (500 items), reads the `total` field, then fires all remaining pages in parallel.
 

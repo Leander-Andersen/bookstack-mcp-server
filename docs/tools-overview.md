@@ -36,8 +36,11 @@ The BookStack MCP Server provides **47+ tools** organized into **13 distinct cat
 |-----------|-------------|----------------|
 | `bookstack_pages_list` | List pages with filtering by book/chapter | count, offset, sort, filter (book_id, chapter_id, draft, template) |
 | `bookstack_pages_create` | Create new page with HTML or Markdown content | name (required), book_id/chapter_id, html/markdown, tags, priority |
-| `bookstack_pages_read` | Get page details with full content | id (required) |
+| `bookstack_pages_read` | Get page details with full content; optionally narrow to grep excerpts, a character window, or metadata only | id (required), grep, case_sensitive, context, max_matches, offset, length, metadata_only |
 | `bookstack_pages_update` | Update page content and move between containers | id (required), name, html/markdown, book_id, chapter_id, tags, priority |
+| `bookstack_pages_edit` | Change parts of a page by literal find-and-replace without resending it | id, edits[{old_string, new_string, replace_all}] (required), dry_run, expected_updated_at, allow_shrink |
+| `bookstack_pages_append` | Add content to the end/start of a page or section | id, content (required), position, section, separator, dry_run, expected_updated_at |
+| `bookstack_pages_outline` | Heading structure, sizes and editor type of a page, without content | id (required) |
 | `bookstack_pages_delete` | Delete page (moves to recycle bin) | id (required) |
 | `bookstack_pages_export` | Export page in various formats | id (required), format (html/pdf/plaintext/markdown) |
 

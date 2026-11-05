@@ -302,6 +302,42 @@ interface PageWithContent extends Page {
 }
 ```
 
+Optional narrowing (all opt-in; without them the full page object is returned unchanged):
+`grep` (literal text, returns excerpts with offsets), `case_sensitive`, `context` (chars each side, 1-2000), `max_matches` (1-50),
+`offset` / `length` (character window into the stored source) and `metadata_only`.
+
+#### Edit Page
+```typescript
+// Tool: bookstack_pages_edit
+interface EditPageParams {
+  id: number;
+  edits: { old_string: string; new_string: string; replace_all?: boolean }[]; // applied in order
+  dry_run?: boolean;             // report what would change, write nothing
+  expected_updated_at?: string;  // best-effort stale check (not an atomic lock)
+  allow_shrink?: boolean;        // permit a result under half the original size
+}
+```
+
+#### Append To Page
+```typescript
+// Tool: bookstack_pages_append
+interface AppendPageParams {
+  id: number;
+  content: string;               // Markdown for markdown pages, HTML otherwise
+  position?: 'start' | 'end';    // default 'end'; 'start' = directly after the section heading
+  section?: string;              // heading text (case-insensitive, substring fallback)
+  separator?: string;
+  dry_run?: boolean;
+  expected_updated_at?: string;
+}
+```
+
+#### Outline Page
+```typescript
+// Tool: bookstack_pages_outline
+// Returns editor, field, total_chars and headings[{level, text, offset, length}]
+```
+
 #### Update Page
 ```typescript
 // Tool: bookstack_pages_update

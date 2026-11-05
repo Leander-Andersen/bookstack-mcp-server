@@ -12,7 +12,7 @@ account_id = "fa8dc1730bfd7b376de59d07758e28b5"
 # server-info tool, and the X-MCP-Server-Version response header all at
 # once. Leave commented out for the default behaviour.
 # SERVER_NAME = "bookstack-mcp-server"
-# SERVER_VERSION = "1.4.0"
+# SERVER_VERSION = "1.5.0"
 
 # Diagnostic OAuth event log — off by default. Set to "true" in the
 # Cloudflare dashboard (Workers → Variables) when you need to debug an
