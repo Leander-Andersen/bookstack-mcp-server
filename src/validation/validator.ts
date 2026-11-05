@@ -164,7 +164,6 @@ const ValidationSchemas = {
     filter: z.object({
       name: z.string().optional(),
       email: z.string().optional(),
-      active: z.boolean().optional(),
     }).optional(),
   }),
 
@@ -181,7 +180,6 @@ const ValidationSchemas = {
     email: z.string().email().max(255).optional(),
     password: z.string().min(8).optional(),
     roles: z.array(z.number()).optional(),
-    active: z.boolean().optional(),
   }),
 
   // Roles

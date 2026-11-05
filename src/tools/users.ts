@@ -70,10 +70,6 @@ export class UserTools {
                 type: 'string',
                 description: 'Filter by email.',
               },
-              active: {
-                type: 'boolean',
-                description: 'Filter by active status.',
-              },
             },
             description: 'Filters.',
           },
@@ -261,10 +257,6 @@ export class UserTools {
             },
             description: 'New list of role IDs (replaces existing roles).',
           },
-          active: {
-            type: 'boolean',
-            description: 'Active status (true/false).',
-          },
           external_auth_id: {
             type: 'string',
             description: 'External ID.',
@@ -273,14 +265,15 @@ export class UserTools {
       },
       examples: [
         {
-          description: 'Deactivate a user',
-          input: { id: 5, active: false },
-          expected_output: 'Updated user object',
-          use_case: 'Offboarding',
+          description: 'Replace a user\'s roles',
+          input: { id: 5, roles: [3] },
+          expected_output: 'The updated user, now holding only role 3',
+          use_case: 'Changing what someone is allowed to do',
         }
       ],
       usage_patterns: [
         'To append a role, read the user first to get current roles, add the new one, and then update.',
+        'There is no `active` flag: BookStack stores no such field on a user. For offboarding, strip their roles with this tool or remove the account with `bookstack_users_delete`.',
       ],
       related_tools: ['bookstack_users_read'],
       error_codes: [
@@ -342,6 +335,9 @@ export class UserTools {
       ],
       handler: async (params: any) => {
         const id = this.validator.validateId(params.id);
+        if (params.migrate_ownership_id !== undefined && Number(params.migrate_ownership_id) === id) {
+          throw new Error('migrate_ownership_id must be a different user than id: naming the deleted user as their own heir leaves their content unowned.');
+        }
         this.logger.warn('Deleting user', { id, migrate_to: params.migrate_ownership_id });
         await this.client.deleteUser(id, params.migrate_ownership_id);
         return { success: true, message: `User ${id} deleted successfully` };

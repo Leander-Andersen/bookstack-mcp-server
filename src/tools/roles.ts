@@ -300,7 +300,7 @@ export class RoleTools {
   private createDeleteRoleTool(): MCPTool {
     return {
       name: 'bookstack_roles_delete',
-      description: 'Delete a role. You can optionally migrate users from this role to another one.',
+      description: "Permanently delete a role. Users assigned to it simply lose it, keeping their other roles; BookStack's API offers no way to move them to another role as part of the deletion, so re-assign them first if they need a replacement. Roles do not go through the recycle bin and cannot be restored.",
       inputSchema: {
         type: 'object',
         required: ['id'],
@@ -309,22 +309,18 @@ export class RoleTools {
             type: 'integer',
             description: 'ID of the role to delete',
           },
-          migrate_ownership_id: {
-            type: 'integer',
-            description: 'ID of another role to move assigned users to.',
-          },
         },
       },
       examples: [
         {
-          description: 'Delete role and migrate users',
-          input: { id: 3, migrate_ownership_id: 2 },
+          description: 'Delete a role',
+          input: { id: 3 },
           expected_output: 'Success message',
-          use_case: 'Consolidating roles',
+          use_case: 'Removing an access level that is no longer used',
         }
       ],
       usage_patterns: [
-        'Always consider where existing users will go when deleting a role',
+        'Re-assign users who need a replacement role before deleting: they simply lose the deleted role.',
       ],
       related_tools: ['bookstack_roles_list'],
       error_codes: [
@@ -336,8 +332,8 @@ export class RoleTools {
       ],
       handler: async (params: any) => {
         const id = this.validator.validateId(params.id);
-        this.logger.warn('Deleting role', { id, migrate_to: params.migrate_ownership_id });
-        await this.client.deleteRole(id, params.migrate_ownership_id);
+        this.logger.warn('Deleting role', { id });
+        await this.client.deleteRole(id);
         return { success: true, message: `Role ${id} deleted successfully` };
       },
     };

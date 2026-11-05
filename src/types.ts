@@ -296,7 +296,6 @@ export interface UsersListParams extends PaginationParams {
   filter?: {
     name?: string;
     email?: string;
-    active?: boolean;
   };
 }
 
@@ -418,7 +417,6 @@ export interface UpdateUserParams {
   email?: string;
   password?: string;
   roles?: number[];
-  active?: boolean;
 }
 
 export interface CreateRoleParams {
@@ -592,7 +590,7 @@ export interface BookStackAPIClient {
   createRole(params: CreateRoleParams): Promise<Role>;
   getRole(id: number): Promise<RoleWithPermissions>;
   updateRole(id: number, params: UpdateRoleParams): Promise<Role>;
-  deleteRole(id: number, migrateOwnershipId?: number): Promise<void>;
+  deleteRole(id: number): Promise<void>;
 
   // Attachments
   listAttachments(params?: AttachmentsListParams): Promise<ListResponse<Attachment>>;

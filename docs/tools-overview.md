@@ -111,7 +111,7 @@ The BookStack MCP Server provides **47+ tools** organized into **13 distinct cat
 | `bookstack_roles_create` | Create new role with permissions | display_name (required), description, mfa_enforced, permissions |
 | `bookstack_roles_read` | Get role details with all permissions | id (required) |
 | `bookstack_roles_update` | Update role permissions and settings | id (required), display_name, description, mfa_enforced, permissions |
-| `bookstack_roles_delete` | Delete role with user migration | id (required), migrate_ownership_id |
+| `bookstack_roles_delete` | Delete a role (assigned users simply lose it) | id (required) |
 
 **Permission System**:
 - Granular permission control (content-export, settings-manage, users-manage, etc.)

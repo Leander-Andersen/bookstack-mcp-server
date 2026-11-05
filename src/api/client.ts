@@ -575,9 +575,8 @@ export class BookStackClient implements BookStackAPIClient {
     return this.request<Role>('PUT', `/roles/${id}`, params);
   }
 
-  async deleteRole(id: number, migrateOwnershipId?: number): Promise<void> {
-    const data = migrateOwnershipId ? { migrate_ownership_id: migrateOwnershipId } : undefined;
-    await this.request<void>('DELETE', `/roles/${id}`, data);
+  async deleteRole(id: number): Promise<void> {
+    await this.request<void>('DELETE', `/roles/${id}`);
   }
 
   // Attachments API

@@ -436,7 +436,6 @@ interface UsersListParams extends PaginationParams {
   filter?: {
     name?: string;     // Partial name match
     email?: string;    // Partial email match
-    active?: boolean;  // Filter by active status
   };
 }
 ```
@@ -470,7 +469,6 @@ interface UpdateUserParams {
   email?: string;             // New email (must be unique)
   password?: string;          // New password
   roles?: number[];           // New role assignments (replaces existing)
-  active?: boolean;           // Enable/disable user
   external_auth_id?: string;  // External auth ID
 }
 ```
@@ -538,7 +536,6 @@ interface RoleWithPermissions extends Role {
 // Tool: bookstack_roles_delete
 interface DeleteRoleParams {
   id: number;                      // Role ID to delete
-  migrate_ownership_id?: number;   // Optional role to migrate users to
 }
 ```
 
